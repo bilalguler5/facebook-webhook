@@ -22,29 +22,27 @@ app.get("/webhook", (req, res) => {
     res.sendStatus(403);
   }
 });
-// Facebook OAuth için basit anasayfa
+
+// Facebook OAuth sonrası sayfaları göstermek için HTML döndür
 app.get('/', (req, res) => {
-  res.send('Facebook OAuth için buradayız');
-});
+  res.send(`
+    <html>
+      <body>
+        <h2>Facebook OAuth başarılı, sayfalar getiriliyor...</h2>
+        <script>
+          const hash = window.location.hash;
+          const params = new URLSearchParams(hash.slice(1));
+          const accessToken = params.get('access_token');
 
-// Facebook'tan gelen veriyi Make'e gönder
-app.post("/webhook", async (req, res) => {
-  console.log("📨 Facebook'tan veri geldi:", JSON.stringify(req.body, null, 2));
-
-  try {
-    await axios.post(
-      "https://hook.us2.make.com/jpkfwm4kjvpdjly72jciots7wtevnbx8",
-      req.body,
-    );
-    console.log("✅ Veri Make'e gönderildi.");
-  } catch (error) {
-    console.error("🚨 HATA:", error.message);
-  }
-
-  res.sendStatus(200);
-});
-
-// Sunucuyu başlat
-app.listen(PORT, () => {
-  console.log(`🚀 Server aktif: http://localhost:${PORT}`);
-});
+          if (accessToken) {
+            fetch('https://graph.facebook.com/v19.0/me/accounts?access_token=' + accessToken)
+              .then(res => res.json())
+              .then(data => {
+                document.body.innerHTML += '<h3>Sayfalar:</h3>';
+                document.body.innerHTML += '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+              })
+              .catch(err => {
+                document.body.innerHTML += '<p style="color:red;">Veri alınamadı: ' + err + '</p>';
+              });
+          } else {
+            document.body.innerHTML += '<p st
