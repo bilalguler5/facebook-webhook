@@ -22,6 +22,10 @@ app.get("/webhook", (req, res) => {
     res.sendStatus(403);
   }
 });
+// Facebook OAuth için basit anasayfa
+app.get('/', (req, res) => {
+  res.send('Facebook OAuth için buradayız');
+});
 
 // Facebook'tan gelen veriyi Make'e gönder
 app.post("/webhook", async (req, res) => {
