@@ -1,5 +1,5 @@
 const express = require("express");
-const axios = require("axios"); // Make'e veri göndermek için
+const axios = require("axios");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -23,26 +23,39 @@ app.get("/webhook", (req, res) => {
   }
 });
 
-// Facebook OAuth sonrası sayfaları göstermek için HTML döndür
-app.get('/', (req, res) => {
+// Facebook OAuth basit arayüz
+app.get("/", (req, res) => {
+  const oauthLink = `https://www.facebook.com/v19.0/dialog/oauth?client_id=1203840651490478&redirect_uri=https://facebook-webhook-production-410a.up.railway.app/&scope=pages_manage_metadata,pages_read_engagement,pages_show_list&response_type=token`;
+
   res.send(`
     <html>
+      <head><title>Facebook OAuth</title></head>
       <body>
-        <h2>Facebook OAuth başarılı, sayfalar getiriliyor...</h2>
-        <script>
-          const hash = window.location.hash;
-          const params = new URLSearchParams(hash.slice(1));
-          const accessToken = params.get('access_token');
+        <h1>Facebook OAuth için buradayız</h1>
+        <a href="${oauthLink}" target="_blank">👉 Facebook Sayfa Yetkisi Ver</a>
+      </body>
+    </html>
+  `);
+});
 
-          if (accessToken) {
-            fetch('https://graph.facebook.com/v19.0/me/accounts?access_token=' + accessToken)
-              .then(res => res.json())
-              .then(data => {
-                document.body.innerHTML += '<h3>Sayfalar:</h3>';
-                document.body.innerHTML += '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
-              })
-              .catch(err => {
-                document.body.innerHTML += '<p style="color:red;">Veri alınamadı: ' + err + '</p>';
-              });
-          } else {
-            document.body.innerHTML += '<p st
+// Webhook POST (Make'e gönder)
+app.post("/webhook", async (req, res) => {
+  console.log("📨 Facebook'tan veri geldi:", JSON.stringify(req.body, null, 2));
+
+  try {
+    await axios.post(
+      "https://hook.us2.make.com/jpkfwm4kjvpdjly72jciots7wtevnbx8",
+      req.body
+    );
+    console.log("✅ Veri Make'e gönderildi.");
+  } catch (error) {
+    console.error("🚨 HATA:", error.message);
+  }
+
+  res.sendStatus(200);
+});
+
+// Sunucuyu başlat
+app.listen(PORT, () => {
+  console.log(`🚀 Server aktif: http://localhost:${PORT}`);
+});
