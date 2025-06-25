@@ -10,7 +10,7 @@ const VERIFY_TOKEN = "Allah1dir.,";
 
 // 🔐 Bunları sen kendin Dashboard'dan alacaksın:
 const APP_ID = "1203840651490478";
-const APP_SECRET = "BURAYA_KENDİ_APP_SECRETİNİ_YAZ"; // 👈 Bunu birazdan göstereceğim
+const APP_SECRET = "de926e19322760edf3b377e0255469de"; // 👈 Bunu birazdan göstereceğim
 const REDIRECT_URI = "https://facebook-webhook-production-410a.up.railway.app/auth";
 
 // Webhook doğrulama
