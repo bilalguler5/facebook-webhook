@@ -88,3 +88,18 @@ app.post("/webhook", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server çalışıyor: http://localhost:${PORT}`);
 });
+// SAYFA LİSTESİ ENDPOINTİ
+app.get("/pages", async (req, res) => {
+  const accessToken = req.query.token;
+
+  try {
+    const response = await axios.get(
+      `https://graph.facebook.com/v19.0/me/accounts?access_token=${accessToken}`
+    );
+
+    res.json(response.data);
+  } catch (error) {
+    console.error("🚨 Sayfa listesi alınamadı:", error.message);
+    res.status(500).send("❌ Sayfa listesi getirilemedi.");
+  }
+});
