@@ -6,14 +6,13 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
+// 🔐 Gerekli Kimlik Bilgileri
 const VERIFY_TOKEN = "Allah1dir.,";
-
-// 🔐 Bunları sen kendin Dashboard'dan alacaksın:
 const APP_ID = "1203840651490478";
-const APP_SECRET = "de926e19322760edf3b377e0255469de"; // 👈 Bunu birazdan göstereceğim
+const APP_SECRET = "de926e19322760edf3b377e0255469de";
 const REDIRECT_URI = "https://facebook-webhook-production-410a.up.railway.app/auth";
 
-// Webhook doğrulama
+// ✅ Webhook Doğrulama
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -28,7 +27,7 @@ app.get("/webhook", (req, res) => {
   }
 });
 
-// Facebook OAuth linki
+// 🌐 OAuth Başlatıcı Link
 app.get("/", (req, res) => {
   const oauthLink = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${APP_ID}&redirect_uri=${REDIRECT_URI}&scope=pages_manage_metadata,pages_read_engagement,pages_show_list&response_type=code`;
 
@@ -43,9 +42,10 @@ app.get("/", (req, res) => {
   `);
 });
 
-// Facebook'tan gelen code ile access_token alma
+// 🔑 Token Alma Endpointi (Facebook → /auth → Token)
 app.get("/auth", async (req, res) => {
   const code = req.query.code;
+
   if (!code) return res.send("❌ Authorization kodu alınamadı.");
 
   try {
@@ -54,7 +54,7 @@ app.get("/auth", async (req, res) => {
         client_id: APP_ID,
         client_secret: APP_SECRET,
         redirect_uri: REDIRECT_URI,
-        code: code,
+        code,
       },
     });
 
@@ -67,7 +67,7 @@ app.get("/auth", async (req, res) => {
   }
 });
 
-// Webhook POST (Facebook -> Make.com)
+// 📩 Facebook → Webhook → Make.com
 app.post("/webhook", async (req, res) => {
   console.log("📨 Facebook'tan veri geldi:", JSON.stringify(req.body, null, 2));
 
@@ -84,11 +84,7 @@ app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
 });
 
-// Server başlat
-app.listen(PORT, () => {
-  console.log(`🚀 Server çalışıyor: http://localhost:${PORT}`);
-});
-// SAYFA LİSTESİ ENDPOINTİ
+// 📄 Facebook Sayfalarını Listele
 app.get("/pages", async (req, res) => {
   const accessToken = req.query.token;
 
@@ -102,4 +98,31 @@ app.get("/pages", async (req, res) => {
     console.error("🚨 Sayfa listesi alınamadı:", error.message);
     res.status(500).send("❌ Sayfa listesi getirilemedi.");
   }
+});
+
+// 🔔 Webhook Aboneliğini Aktif Et
+app.post("/subscribe", async (req, res) => {
+  const { pageId, pageAccessToken } = req.body;
+
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${pageId}/subscribed_apps`,
+      {},
+      {
+        headers: {
+          Authorization: `Bearer ${pageAccessToken}`,
+        },
+      }
+    );
+
+    res.send("✅ Webhook başarılı şekilde abone oldu.");
+  } catch (error) {
+    console.error("🚨 Abonelik hatası:", error.message);
+    res.status(500).send("❌ Webhook aboneliği başarısız.");
+  }
+});
+
+// 🚀 Server Başlat
+app.listen(PORT, () => {
+  console.log(`🚀 Server çalışıyor: http://localhost:${PORT}`);
 });
