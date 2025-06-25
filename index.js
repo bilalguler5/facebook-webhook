@@ -8,6 +8,11 @@ app.use(express.json());
 
 const VERIFY_TOKEN = "Allah1dir.,";
 
+// 🔐 Bunları sen kendin Dashboard'dan alacaksın:
+const APP_ID = "1203840651490478";
+const APP_SECRET = "BURAYA_KENDİ_APP_SECRETİNİ_YAZ"; // 👈 Bunu birazdan göstereceğim
+const REDIRECT_URI = "https://facebook-webhook-production-410a.up.railway.app/auth";
+
 // Webhook doğrulama
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
@@ -23,9 +28,9 @@ app.get("/webhook", (req, res) => {
   }
 });
 
-// Facebook OAuth basit arayüz
+// Facebook OAuth linki
 app.get("/", (req, res) => {
-  const oauthLink = `https://www.facebook.com/v19.0/dialog/oauth?client_id=1203840651490478&redirect_uri=https://facebook-webhook-production-410a.up.railway.app/&scope=pages_manage_metadata,pages_read_engagement,pages_show_list&response_type=token`;
+  const oauthLink = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${APP_ID}&redirect_uri=${REDIRECT_URI}&scope=pages_manage_metadata,pages_read_engagement,pages_show_list&response_type=code`;
 
   res.send(`
     <html>
@@ -38,7 +43,31 @@ app.get("/", (req, res) => {
   `);
 });
 
-// Webhook POST (Make'e gönder)
+// Facebook'tan gelen code ile access_token alma
+app.get("/auth", async (req, res) => {
+  const code = req.query.code;
+  if (!code) return res.send("❌ Authorization kodu alınamadı.");
+
+  try {
+    const result = await axios.get("https://graph.facebook.com/v19.0/oauth/access_token", {
+      params: {
+        client_id: APP_ID,
+        client_secret: APP_SECRET,
+        redirect_uri: REDIRECT_URI,
+        code: code,
+      },
+    });
+
+    const accessToken = result.data.access_token;
+    console.log("✅ Facebook Access Token:", accessToken);
+    res.send("✅ Access Token alındı! Loglara bakabilirsin.");
+  } catch (err) {
+    console.error("🚨 Access Token alma hatası:", err.message);
+    res.send("❌ Token alma işlemi başarısız.");
+  }
+});
+
+// Webhook POST (Facebook -> Make.com)
 app.post("/webhook", async (req, res) => {
   console.log("📨 Facebook'tan veri geldi:", JSON.stringify(req.body, null, 2));
 
@@ -49,13 +78,13 @@ app.post("/webhook", async (req, res) => {
     );
     console.log("✅ Veri Make'e gönderildi.");
   } catch (error) {
-    console.error("🚨 HATA:", error.message);
+    console.error("🚨 Make.com gönderim hatası:", error.message);
   }
 
   res.sendStatus(200);
 });
 
-// Sunucuyu başlat
+// Server başlat
 app.listen(PORT, () => {
-  console.log(`🚀 Server aktif: http://localhost:${PORT}`);
+  console.log(`🚀 Server çalışıyor: http://localhost:${PORT}`);
 });
