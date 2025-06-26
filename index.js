@@ -72,17 +72,30 @@ app.post("/webhook", async (req, res) => {
   console.log("📨 Facebook'tan veri geldi:", JSON.stringify(req.body, null, 2));
 
   try {
-    await axios.post(
-      "https://hook.us2.make.com/jpkfwm4kjvpdjly72jciots7wtevnbx8",
-      req.body
-    );
-    console.log("✅ Veri Make'e gönderildi.");
-  } catch (error) {
-    console.error("🚨 Make.com gönderim hatası:", error.message);
-  }
+    const changes = req.body.entry?.[0]?.changes?.[0];
+    const item = changes?.value?.item;
+    const verb = changes?.value?.verb;
 
-  res.sendStatus(200);
+    // ❌ Filtre: sadece comment, share veya silinmiş içerikler gönderilsin
+    const isCommentOrShare = item === "comment" || item === "share";
+    const isDeleted = verb === "remove" || verb === "delete";
+
+    if (!isCommentOrShare && !isDeleted) {
+      console.log(`⛔ Gereksiz tetikleme (${item}, ${verb}) – işlenmedi.`);
+      return res.status(200).send("Gereksiz tetikleme – işlenmedi");
+    }
+
+    // ✅ Make'e yönlendir
+    await axios.post("https://hook.us2.make.com/jpkfwm4kjvpdjly72jciots7wtevnbx8", req.body);
+    console.log("✅ Veri Make'e gönderildi.");
+    res.status(200).send("Make'e gönderildi");
+
+  } catch (error) {
+    console.error("🚨 Webhook işlenemedi:", error.message);
+    res.sendStatus(500);
+  }
 });
+
 
 // 📄 Facebook Sayfalarını Listele
 app.get("/pages", async (req, res) => {
