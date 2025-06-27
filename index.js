@@ -76,18 +76,17 @@ app.post("/webhook", async (req, res) => {
     const item = changes?.value?.item;
     const verb = changes?.value?.verb;
 
-    // ❌ Filtre: sadece comment, share veya silinmiş içerikler gönderilsin
-    const isCommentOrShare = item === "comment" || item === "share";
-    const isDeleted = verb === "remove" || verb === "delete";
+    // ✅ Filtre: Sadece yeni yapılan yorumlar gönderilsin (comment + add)
+    const isNewComment = item === "comment" && verb === "add";
 
-    if (!isCommentOrShare && !isDeleted) {
+    if (!isNewComment) {
       console.log(`⛔ Gereksiz tetikleme (${item}, ${verb}) – işlenmedi.`);
       return res.status(200).send("Gereksiz tetikleme – işlenmedi");
     }
 
-    // ✅ Make'e yönlendir
+    // ✅ Yeni yorum Make'e gönderilir
     await axios.post("https://hook.us2.make.com/jpkfwm4kjvpdjly72jciots7wtevnbx8", req.body);
-    console.log("✅ Veri Make'e gönderildi.");
+    console.log("✅ Yeni yorum Make'e gönderildi.");
     res.status(200).send("Make'e gönderildi");
 
   } catch (error) {
@@ -95,6 +94,7 @@ app.post("/webhook", async (req, res) => {
     res.sendStatus(500);
   }
 });
+
 
 
 // 📄 Facebook Sayfalarını Listele
