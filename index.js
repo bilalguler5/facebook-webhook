@@ -6,11 +6,18 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// 🔐 Gerekli Kimlik Bilgileri
+// --- Sabitler ---
 const VERIFY_TOKEN = "Allah1dir.,";
-const APP_ID = "1203840651490478";
-const APP_SECRET = "de926e19322760edf3b377e0255469de";
-const REDIRECT_URI = "https://facebook-webhook-production-410a.up.railway.app/auth";
+const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/jpkfwm4kjvpdjly72jciots7wtevnbx8";
+
+// ✅ Otomasyonun çalışacağı izinli Facebook Sayfa ID'leri
+const ALLOWED_PAGE_IDS = new Set([
+  "768328876640929",    // Nasıl Yapılır TV
+  "757013007687866",    // hobiler
+  "708914999121089",    // Nurgül İle El sanatları
+  "141535723466",       // My Hobby
+  "1606844446205856"    // El Sanatları ve Hobi
+]);
 
 // ✅ Webhook Doğrulama
 app.get("/webhook", (req, res) => {
@@ -27,56 +34,25 @@ app.get("/webhook", (req, res) => {
   }
 });
 
-// 🌐 OAuth Başlatıcı Link
-app.get("/", (req, res) => {
-  const oauthLink = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${APP_ID}&redirect_uri=${REDIRECT_URI}&scope=pages_manage_metadata,pages_read_engagement,pages_show_list&response_type=code`;
-
-  res.send(`
-    <html>
-      <head><title>Facebook OAuth</title></head>
-      <body>
-        <h1>Facebook OAuth için buradayız</h1>
-        <a href="${oauthLink}" target="_blank">👉 Facebook Sayfa Yetkisi Ver</a>
-      </body>
-    </html>
-  `);
-});
-
-// 🔑 Token Alma Endpointi (Facebook → /auth → Token)
-app.get("/auth", async (req, res) => {
-  const code = req.query.code;
-
-  if (!code) return res.send("❌ Authorization kodu alınamadı.");
-
-  try {
-    const result = await axios.get("https://graph.facebook.com/v19.0/oauth/access_token", {
-      params: {
-        client_id: APP_ID,
-        client_secret: APP_SECRET,
-        redirect_uri: REDIRECT_URI,
-        code,
-      },
-    });
-
-    const accessToken = result.data.access_token;
-    console.log("✅ Facebook Access Token:", accessToken);
-    res.send("✅ Access Token alındı! Loglara bakabilirsin.");
-  } catch (err) {
-    console.error("🚨 Access Token alma hatası:", err.message);
-    res.send("❌ Token alma işlemi başarısız.");
-  }
-});
-
-// 📩 Facebook → Webhook → Make.com
+// 📩 Facebook → Webhook → Make.com (Güncellenmiş Filtreleme Mantığı ile)
 app.post("/webhook", async (req, res) => {
   console.log("📨 Facebook'tan veri geldi:", JSON.stringify(req.body, null, 2));
 
   try {
-    const changes = req.body.entry?.[0]?.changes?.[0];
-    const item = changes?.value?.item;
-    const verb = changes?.value?.verb;
+    const entry = req.body.entry?.[0];
+    const changes = entry?.changes?.[0];
 
-    // ✅ Filtre: Sadece yeni yapılan yorumlar gönderilsin (comment + add)
+    // Gerekli verilerin varlığını kontrol et
+    if (!entry || !changes?.value) {
+        console.log("⛔ Gelen veri yapısı eksik, işlenmedi.");
+        return res.status(200).send("Veri yapısı eksik, işlenmedi.");
+    }
+    
+    const item = changes.value.item;
+    const verb = changes.value.verb;
+    const pageId = entry.id; // Sayfa ID'sini al
+
+    // ✅ Filtre 1: Sadece yeni yapılan yorumlar (comment + add)
     const isNewComment = item === "comment" && verb === "add";
 
     if (!isNewComment) {
@@ -84,9 +60,15 @@ app.post("/webhook", async (req, res) => {
       return res.status(200).send("Gereksiz tetikleme – işlenmedi");
     }
 
-    // ✅ Yeni yorum Make'e gönderilir
-    await axios.post("https://hook.us2.make.com/jpkfwm4kjvpdjly72jciots7wtevnbx8", req.body);
-    console.log("✅ Yeni yorum Make'e gönderildi.");
+    // ✅ Filtre 2: Yorumun izin verilen sayfalardan gelip gelmediğini kontrol et
+    if (!ALLOWED_PAGE_IDS.has(pageId)) {
+      console.log(`⛔ ${pageId} ID'li sayfa izin listesinde değil. Yorum Make'e gönderilmedi.`);
+      return res.status(200).send("Sayfa izinli değil, işlenmedi.");
+    }
+
+    // ✅ Tüm filtrelerden geçti, yorumu Make'e gönder
+    await axios.post(MAKE_WEBHOOK_URL, req.body);
+    console.log(`✅ ${pageId} ID'li sayfadan gelen yeni yorum Make'e gönderildi.`);
     res.status(200).send("Make'e gönderildi");
 
   } catch (error) {
@@ -96,44 +78,48 @@ app.post("/webhook", async (req, res) => {
 });
 
 
+// Diğer endpointler (değişiklik yok)
+const APP_ID = "1203840651490478";
+const APP_SECRET = "de926e19322760edf3b377e0255469de";
+const REDIRECT_URI = "https://facebook-webhook-production-410a.up.railway.app/auth";
 
-// 📄 Facebook Sayfalarını Listele
+app.get("/", (req, res) => {
+    const oauthLink = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${APP_ID}&redirect_uri=${REDIRECT_URI}&scope=pages_manage_metadata,pages_read_engagement,pages_show_list&response_type=code`;
+    res.send(`<html><head><title>Facebook OAuth</title></head><body><h1>Facebook OAuth için buradayız</h1><a href="${oauthLink}" target="_blank">👉 Facebook Sayfa Yetkisi Ver</a></body></html>`);
+});
+app.get("/auth", async (req, res) => {
+    const code = req.query.code;
+    if (!code) return res.send("❌ Authorization kodu alınamadı.");
+    try {
+        const result = await axios.get("https://graph.facebook.com/v19.0/oauth/access_token", { params: { client_id: APP_ID, client_secret: APP_SECRET, redirect_uri: REDIRECT_URI, code } });
+        console.log("✅ Facebook Access Token:", result.data.access_token);
+        res.send("✅ Access Token alındı! Loglara bakabilirsin.");
+    } catch (err) {
+        console.error("🚨 Access Token alma hatası:", err.message);
+        res.send("❌ Token alma işlemi başarısız.");
+    }
+});
 app.get("/pages", async (req, res) => {
-  const accessToken = req.query.token;
-
-  try {
-    const response = await axios.get(
-      `https://graph.facebook.com/v19.0/me/accounts?access_token=${accessToken}`
-    );
-
-    res.json(response.data);
-  } catch (error) {
-    console.error("🚨 Sayfa listesi alınamadı:", error.message);
-    res.status(500).send("❌ Sayfa listesi getirilemedi.");
-  }
+    const accessToken = req.query.token;
+    try {
+        const response = await axios.get(`https://graph.facebook.com/v19.0/me/accounts?access_token=${accessToken}`);
+        res.json(response.data);
+    } catch (error) {
+        console.error("🚨 Sayfa listesi alınamadı:", error.message);
+        res.status(500).send("❌ Sayfa listesi getirilemedi.");
+    }
 });
-
-// 🔔 Webhook Aboneliğini Aktif Et
 app.post("/subscribe", async (req, res) => {
-  const { pageId, pageAccessToken } = req.body;
-
-  try {
-    await axios.post(
-      `https://graph.facebook.com/v19.0/${pageId}/subscribed_apps`,
-      {},
-      {
-        headers: {
-          Authorization: `Bearer ${pageAccessToken}`,
-        },
-      }
-    );
-
-    res.send("✅ Webhook başarılı şekilde abone oldu.");
-  } catch (error) {
-    console.error("🚨 Abonelik hatası:", error.message);
-    res.status(500).send("❌ Webhook aboneliği başarısız.");
-  }
+    const { pageId, pageAccessToken } = req.body;
+    try {
+        await axios.post(`https://graph.facebook.com/v19.0/${pageId}/subscribed_apps`, {}, { headers: { Authorization: `Bearer ${pageAccessToken}` } });
+        res.send("✅ Webhook başarılı şekilde abone oldu.");
+    } catch (error) {
+        console.error("🚨 Abonelik hatası:", error.message);
+        res.status(500).send("❌ Webhook aboneliği başarısız.");
+    }
 });
+
 
 // 🚀 Server Başlat
 app.listen(PORT, () => {
