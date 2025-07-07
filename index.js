@@ -16,8 +16,8 @@ const ALLOWED_PAGE_IDS = new Set([
   "757013007687866",    // Hobiler
   "708914999121089",    // Nurgül İle El sanatları
   "141535723466",       // My Hobby
-  "1606844446205856"    // El Sanatları ve Hobi
-  "300592430012288"     // Knitting &   Crochet World
+  "1606844446205856",   // El Sanatları ve Hobi
+  "300592430012288",    // Knitting &   Crochet World
   "1802019006694158"    // Modelist/Terzi   Hatice DEMİR
 ]);
 
