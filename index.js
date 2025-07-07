@@ -13,7 +13,7 @@ const MAKE_WEBHOOK_URL = "https://hook.us2.make.com/jpkfwm4kjvpdjly72jciots7wtev
 // ✅ Otomasyonun çalışacağı izinli Facebook Sayfa ID'leri
 const ALLOWED_PAGE_IDS = new Set([
   "768328876640929",    // Nasıl Yapılır TV
-  "757013007687866",    // hobiler
+  "757013007687866",    // Hobiler
   "708914999121089",    // Nurgül İle El sanatları
   "141535723466",       // My Hobby
   "1606844446205856"    // El Sanatları ve Hobi
