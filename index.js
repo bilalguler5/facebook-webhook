@@ -8,8 +8,10 @@ app.use(express.json());
 
 // --- Sabitler ---
 const VERIFY_TOKEN = "Allah1dir.,";
-const COMMENT_WEBHOOK_URL = "https://hook.us2.make.com/jpkfwm4kjvpdjly72jciots7wtevnbx8"; // Mevcut yorum otomasyonu
-const NEW_VIDEO_WEBHOOK_URL = "https://hook.us2.make.com/uj2w7lpphvej3lmtudfpmhwnezxxu7om"; // YENİ video otomasyonu
+// Yorum otomasyonu için Make.com Webhook URL'si
+const COMMENT_WEBHOOK_URL = "https://hook.us2.make.com/jpkfwm4kjvpdjly72jciots7wtevnbx8"; 
+// Yeni gönderi (video/resim) otomasyonu için Make.com Webhook URL'si
+const NEW_POST_WEBHOOK_URL = "https://hook.us2.make.com/uj2w7lpphvej3lmtudfpmhwnezxxu7om"; 
 
 // ✅ Otomasyonun çalışacağı izinli Facebook Sayfa ID'leri
 const ALLOWED_PAGE_IDS = new Set([
@@ -54,16 +56,16 @@ app.post("/webhook", async (req, res) => {
     const verb = changes.value.verb;
     const pageId = entry.id;
 
-    // --- ÖNCE YENİ VİDEO GÖNDERİSİ KONTROLÜ ---
-    const isNewVideo = (item === 'status' || item === 'video') && verb === 'add' && changes.value.status_type === 'added_video';
+    // --- YENİ GÖNDERİ KONTROLÜ (VİDEO, RESİM, DURUM) ---
+    const isNewPost = (item === 'status' || item === 'video' || item === 'photo') && verb === 'add';
 
-    if (isNewVideo) {
-      console.log(`✅ Yeni video gönderisi algılandı (${pageId}). Yorum yapmak için senaryo tetikleniyor.`);
-      await axios.post(NEW_VIDEO_WEBHOOK_URL, req.body);
-      return res.status(200).send("Yeni video gönderisi işlenmek üzere gönderildi.");
+    if (isNewPost) {
+      console.log(`✅ Yeni gönderi (${item}) algılandı (${pageId}). Yorum yapmak için senaryo tetikleniyor.`);
+      await axios.post(NEW_POST_WEBHOOK_URL, req.body);
+      return res.status(200).send("Yeni gönderi işlenmek üzere gönderildi.");
     }
     
-    // --- SONRA MEVCUT YORUM KONTROLÜ ---
+    // --- YENİ YORUM KONTROLÜ ---
     const isNewComment = item === "comment" && verb === "add";
     if (isNewComment) {
       const fromId = changes.value.from?.id;
@@ -97,16 +99,43 @@ const APP_SECRET = "de926e19322760edf3b377e0255469de";
 const REDIRECT_URI = "https://facebook-webhook-production-410a.up.railway.app/auth";
 
 app.get("/", (req, res) => {
-    // ...
+    const oauthLink = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${APP_ID}&redirect_uri=${REDIRECT_URI}&scope=pages_manage_metadata,pages_read_engagement,pages_show_list&response_type=code`;
+    res.send(`<html><head><title>Facebook OAuth</title></head><body><h1>Facebook OAuth için buradayız</h1><a href="${oauthLink}" target="_blank">👉 Facebook Sayfa Yetkisi Ver</a></body></html>`);
 });
+
 app.get("/auth", async (req, res) => {
-    // ...
+    const code = req.query.code;
+    if (!code) return res.send("❌ Authorization kodu alınamadı.");
+    try {
+        const result = await axios.get("https://graph.facebook.com/v19.0/oauth/access_token", { params: { client_id: APP_ID, client_secret: APP_SECRET, redirect_uri: REDIRECT_URI, code } });
+        console.log("✅ Facebook Access Token:", result.data.access_token);
+        res.send("✅ Access Token alındı! Loglara bakabilirsin.");
+    } catch (err) {
+        console.error("🚨 Access Token alma hatası:", err.message);
+        res.send("❌ Token alma işlemi başarısız.");
+    }
 });
+
 app.get("/pages", async (req, res) => {
-    // ...
+    const accessToken = req.query.token;
+    try {
+        const response = await axios.get(`https://graph.facebook.com/v19.0/me/accounts?access_token=${accessToken}`);
+        res.json(response.data);
+    } catch (error) {
+        console.error("🚨 Sayfa listesi alınamadı:", error.message);
+        res.status(500).send("❌ Sayfa listesi getirilemedi.");
+    }
 });
+
 app.post("/subscribe", async (req, res) => {
-    // ...
+    const { pageId, pageAccessToken } = req.body;
+    try {
+        await axios.post(`https://graph.facebook.com/v19.0/${pageId}/subscribed_apps`, {}, { headers: { Authorization: `Bearer ${pageAccessToken}` } });
+        res.send("✅ Webhook başarılı şekilde abone oldu.");
+    } catch (error) {
+        console.error("🚨 Abonelik hatası:", error.message);
+        res.status(500).send("❌ Webhook aboneliği başarısız.");
+    }
 });
 
 // 🚀 Server Başlat
