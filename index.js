@@ -1,144 +1,143 @@
-const express = require("express");
-const axios = require("axios");
+const express = require('express');
+const axios = require('axios');
+const crypto =require('crypto');
 
 const app = express();
+
+// --- DEĞİŞKENLER (Railway "Variables" sekmesinden okunacak) ---
 const PORT = process.env.PORT || 3000;
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
+const APP_SECRET = process.env.APP_SECRET;
+const COMMENT_WEBHOOK_URL = process.env.COMMENT_WEBHOOK_URL; // Yorumlar için Make.com URL'niz
+const NEW_POST_WEBHOOK_URL = process.env.NEW_POST_WEBHOOK_URL; // Yeni gönderiler için Make.com URL'niz
 
-app.use(express.json());
+// Facebook imzasını doğrulamak için ham gövdeyi (raw body) alıyoruz
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  }
+}));
 
-// --- Sabitler ---
-const VERIFY_TOKEN = "Allah1dir.,";
-// Yorum otomasyonu için Make.com Webhook URL'si
-const COMMENT_WEBHOOK_URL = "https://hook.us2.make.com/jpkfwm4kjvpdjly72jciots7wtevnbx8"; 
-// Yeni gönderi (video/resim) otomasyonu için Make.com Webhook URL'si
-const NEW_POST_WEBHOOK_URL = "https://hook.us2.make.com/uj2w7lpphvej3lmtudfpmhwnezxxu7om"; 
+// --- WEBHOOK DOĞRULAMA (GET) ---
+app.get('/facebook-webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
 
-// ✅ Otomasyonun çalışacağı izinli Facebook Sayfa ID'leri
-const ALLOWED_PAGE_IDS = new Set([
-  "768328876640929",    // Nasıl Yapılır TV
-  "757013007687866",    // Hobiler
-  "708914999121089",    // Nurgül İle El sanatları
-  "141535723466",       // My Hobby
-  "1606844446205856",   // El Sanatları ve Hobi
-  "300592430012288",    // Knitting &   Crochet World
-  "1802019006694158",   // Modelist/Terzi   Hatice DEMİR
-  "105749897807346"     // Fashion World
-]);
-
-// ✅ Webhook Doğrulama
-app.get("/webhook", (req, res) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-
-  if (mode === "subscribe" && token === VERIFY_TOKEN) {
-    console.log("✅ Webhook doğrulandı.");
+  if (mode && token && mode === 'subscribe' && token === VERIFY_TOKEN) {
+    console.log('WEBHOOK_VERIFIED');
     res.status(200).send(challenge);
   } else {
-    console.warn("⛔ Webhook doğrulama başarısız.");
     res.sendStatus(403);
   }
 });
 
-// 📩 Facebook → Webhook → İlgili Make Senaryosuna Yönlendirme
-app.post("/webhook", async (req, res) => {
-  console.log("📨 Facebook'tan veri geldi:", JSON.stringify(req.body, null, 2));
+// --- WEBHOOK OLAYLARINI ALMA (POST) ---
+app.post('/facebook-webhook', (req, res) => {
+  // İsteğin Facebook'tan geldiğini doğrula
+  if (!verifyRequestSignature(req, res, req.headers['x-hub-signature-256'])) {
+    return; // Doğrulama başarısızsa fonksiyonu sonlandır
+  }
 
-  try {
-    const entry = req.body.entry?.[0];
-    const changes = entry?.changes?.[0];
-
-    if (!entry || !changes?.value) {
-        return res.status(200).send("Veri yapısı eksik, işlenmedi.");
-    }
-    
-    const item = changes.value.item;
-    const verb = changes.value.verb;
-    const pageId = entry.id;
-
-    // --- YENİ GÖNDERİ KONTROLÜ (VİDEO, RESİM, DURUM) ---
-    const isNewPost = (item === 'status' || item === 'video' || item === 'photo') && verb === 'add';
-
-    if (isNewPost) {
-      console.log(`✅ Yeni gönderi (${item}) algılandı (${pageId}). Yorum yapmak için senaryo tetikleniyor.`);
-      await axios.post(NEW_POST_WEBHOOK_URL, req.body);
-      return res.status(200).send("Yeni gönderi işlenmek üzere gönderildi.");
-    }
-    
-    // --- YENİ YORUM KONTROLÜ ---
-    const isNewComment = item === "comment" && verb === "add";
-    if (isNewComment) {
-      const fromId = changes.value.from?.id;
-      if (!ALLOWED_PAGE_IDS.has(pageId)) {
-        console.log(`⛔ Yorum, izinli olmayan bir sayfadan (${pageId}). İşlenmedi.`);
-        return res.status(200).send("Sayfa izinli değil.");
-      }
-      if (fromId && fromId === pageId) {
-        console.log(`⛔ Sayfanın kendi yorumu (${pageId}). Döngü önlemi. İşlenmedi.`);
-        return res.status(200).send("Sayfanın kendi yorumu.");
-      }
-      
-      console.log(`✅ Yeni kullanıcı yorumu (${pageId}). Yorum otomasyonuna gönderiliyor.`);
-      await axios.post(COMMENT_WEBHOOK_URL, req.body);
-      return res.status(200).send("Yorum otomasyonuna gönderildi.");
-    }
-
-    // Yukarıdaki koşullara uymayan diğer her şey
-    console.log(`⛔ Gereksiz tetikleme (${item}, ${verb}). İşlenmedi.`);
-    res.status(200).send("Gereksiz tetikleme.");
-
-  } catch (error) {
-    console.error("🚨 Webhook işlenemedi:", error.message);
-    res.sendStatus(500);
+  const body = req.body;
+  if (body.object === 'page') {
+    body.entry.forEach(entry => {
+      entry.changes.forEach(change => {
+        if (change.field === 'feed') {
+          const itemData = change.value;
+          // Yeni bir gönderi mi?
+          if (itemData.item === 'post' && itemData.verb === 'add') {
+             console.log("Yeni bir gönderi algılandı.");
+             handleNewPost(itemData);
+          }
+          // Yeni bir yorum mu?
+          else if (itemData.item === 'comment' && itemData.verb === 'add') {
+            console.log("Yeni bir yorum algılandı.");
+            handleNewComment(itemData);
+          }
+        }
+      });
+    });
+    res.status(200).send('EVENT_RECEIVED');
+  } else {
+    res.sendStatus(404);
   }
 });
 
-// --- Diğer Endpoint'ler (Değişiklik Yok) ---
-const APP_ID = "1203840651490478";
-const APP_SECRET = "de926e19322760edf3b377e0255469de";
-const REDIRECT_URI = "https://facebook-webhook-production-410a.up.railway.app/auth";
+// --- YENİ YORUMU İŞLEYEN FONKSİYON ---
+async function handleNewComment(data) {
+  const commentId = data.comment_id;
+  const pageId = data.post_id.split('_')[0];
 
-app.get("/", (req, res) => {
-    const oauthLink = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${APP_ID}&redirect_uri=${REDIRECT_URI}&scope=pages_manage_metadata,pages_read_engagement,pages_show_list&response_type=code`;
-    res.send(`<html><head><title>Facebook OAuth</title></head><body><h1>Facebook OAuth için buradayız</h1><a href="${oauthLink}" target="_blank">👉 Facebook Sayfa Yetkisi Ver</a></body></html>`);
-});
+  if (!PAGE_ACCESS_TOKEN) {
+    console.error("HATA: PAGE_ACCESS_TOKEN ayarlanmamış!");
+    return;
+  }
+  
+  try {
+    const url = `https://graph.facebook.com/v20.0/${commentId}?fields=from&access_token=${PAGE_ACCESS_TOKEN}`;
+    const response = await axios.get(url);
+    const commenterId = response.data.from.id;
 
-app.get("/auth", async (req, res) => {
-    const code = req.query.code;
-    if (!code) return res.send("❌ Authorization kodu alınamadı.");
-    try {
-        const result = await axios.get("https://graph.facebook.com/v19.0/oauth/access_token", { params: { client_id: APP_ID, client_secret: APP_SECRET, redirect_uri: REDIRECT_URI, code } });
-        console.log("✅ Facebook Access Token:", result.data.access_token);
-        res.send("✅ Access Token alındı! Loglara bakabilirsin.");
-    } catch (err) {
-        console.error("🚨 Access Token alma hatası:", err.message);
-        res.send("❌ Token alma işlemi başarısız.");
+    if (commenterId === pageId) {
+      console.log("--> Yorum Sayfa Sahibi tarafından yapıldı. İşlem yapılmayacak.");
+    } else {
+      console.log("--> Yorum bir ziyaretçi tarafından yapıldı. Make.com otomasyonu tetikleniyor...");
+      if (COMMENT_WEBHOOK_URL) {
+        // Ziyaretçi yorum yaptığında Make.com'a veriyi gönder
+        await axios.post(COMMENT_WEBHOOK_URL, data);
+        console.log("Yorum verisi başarıyla Make.com'a gönderildi.");
+      } else {
+        console.warn("UYARI: COMMENT_WEBHOOK_URL ayarlanmamış.");
+      }
     }
-});
+  } catch (error) {
+    console.error("Yorum işlenirken hata oluştu:", error.response ? error.response.data.error.message : error.message);
+  }
+}
 
-app.get("/pages", async (req, res) => {
-    const accessToken = req.query.token;
-    try {
-        const response = await axios.get(`https://graph.facebook.com/v19.0/me/accounts?access_token=${accessToken}`);
-        res.json(response.data);
-    } catch (error) {
-        console.error("🚨 Sayfa listesi alınamadı:", error.message);
-        res.status(500).send("❌ Sayfa listesi getirilemedi.");
+// --- YENİ GÖNDERİYİ İŞLEYEN FONKSİYON ---
+async function handleNewPost(data) {
+    console.log("--> Yeni gönderi otomasyonu tetikleniyor...");
+    if (NEW_POST_WEBHOOK_URL) {
+        try {
+            // Yeni gönderi olduğunda Make.com'a veriyi gönder
+            await axios.post(NEW_POST_WEBHOOK_URL, data);
+            console.log("Gönderi verisi başarıyla Make.com'a gönderildi.");
+        } catch (error) {
+            console.error("Gönderi verisi gönderilirken hata oluştu:", error.message);
+        }
+    } else {
+        console.warn("UYARI: NEW_POST_WEBHOOK_URL ayarlanmamış.");
     }
-});
+}
 
-app.post("/subscribe", async (req, res) => {
-    const { pageId, pageAccessToken } = req.body;
-    try {
-        await axios.post(`https://graph.facebook.com/v19.0/${pageId}/subscribed_apps`, {}, { headers: { Authorization: `Bearer ${pageAccessToken}` } });
-        res.send("✅ Webhook başarılı şekilde abone oldu.");
-    } catch (error) {
-        console.error("🚨 Abonelik hatası:", error.message);
-        res.status(500).send("❌ Webhook aboneliği başarısız.");
-    }
-});
+// --- FACEBOOK İSTEK DOĞRULAMA ---
+function verifyRequestSignature(req, res, signature) {
+  if (!signature) {
+    console.error("İstek imzasız geldi, reddediliyor.");
+    res.sendStatus(403);
+    return false;
+  }
+  if (!APP_SECRET) {
+      console.error("UYARI: APP_SECRET tanımlı değil. İmza doğrulanamıyor.");
+      res.sendStatus(403);
+      return false; 
+  }
 
-// 🚀 Server Başlat
+  const hmac = crypto.createHmac('sha256', APP_SECRET);
+  hmac.update(req.rawBody);
+  const expectedSignature = `sha256=${hmac.digest('hex')}`;
+
+  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
+      console.error("İmza eşleşmedi, istek reddediliyor.");
+      res.sendStatus(403);
+      return false;
+  }
+  return true;
+}
+
 app.listen(PORT, () => {
-  console.log(`🚀 Server çalışıyor: http://localhost:${PORT}`);
+  console.log(`Webhook sunucusu ${PORT} portunda dinleniyor...`);
 });
