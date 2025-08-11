@@ -9,9 +9,11 @@ app.use(express.json());
 // --- Sabitler ---
 const VERIFY_TOKEN = "Allah1dir.,";
 // Yorum otomasyonu için Make.com Webhook URL'si
-const COMMENT_WEBHOOK_URL = "https://hook.us2.make.com/jpkfwm4kjvpdjly72jciots7wtevnbx8"; 
+const COMMENT_WEBHOOK_URL = "https://hook.us2.make.com/jpkfwm4kjvpdjly72jciots7wtevnbx8";
 // Yeni gönderi (video/resim) otomasyonu için Make.com Webhook URL'si
-const NEW_POST_WEBHOOK_URL = "https://hook.us2.make.com/uj2w7lpphvej3lmtudfpmhwnezxxu7om"; 
+const NEW_POST_WEBHOOK_URL = "https://hook.us2.make.com/uj2w7lpphvej3lmtudfpmhwnezxxu7om";
+// YENİ: Pattern isteyen yorumları Telegram'a bildiren otomasyon için Webhook URL'si
+const PATTERN_REQUEST_WEBHOOK_URL = "https://hook.us2.make.com/rvcgwaursmfmu8gn2mkgxdkvrhyu8yay";
 
 // ✅ Otomasyonun çalışacağı izinli Facebook Sayfa ID'leri
 const ALLOWED_PAGE_IDS = new Set([
@@ -40,7 +42,7 @@ app.get("/webhook", (req, res) => {
   }
 });
 
-// 📩 Facebook → Webhook → İlgili Make Senaryosuna Yönlendirme
+// 📩 Facebook → Webhook → İlgili Make Senaryolarına Yönlendirme
 app.post("/webhook", async (req, res) => {
   console.log("📨 Facebook'tan veri geldi:", JSON.stringify(req.body, null, 2));
 
@@ -49,9 +51,9 @@ app.post("/webhook", async (req, res) => {
     const changes = entry?.changes?.[0];
 
     if (!entry || !changes?.value) {
-        return res.status(200).send("Veri yapısı eksik, işlenmedi.");
+      return res.status(200).send("Veri yapısı eksik, işlenmedi.");
     }
-    
+
     const item = changes.value.item;
     const verb = changes.value.verb;
     const pageId = entry.id;
@@ -64,7 +66,7 @@ app.post("/webhook", async (req, res) => {
       await axios.post(NEW_POST_WEBHOOK_URL, req.body);
       return res.status(200).send("Yeni gönderi işlenmek üzere gönderildi.");
     }
-    
+
     // --- YENİ YORUM KONTROLÜ ---
     const isNewComment = item === "comment" && verb === "add";
     if (isNewComment) {
@@ -77,10 +79,16 @@ app.post("/webhook", async (req, res) => {
         console.log(`⛔ Sayfanın kendi yorumu (${pageId}). Döngü önlemi. İşlenmedi.`);
         return res.status(200).send("Sayfanın kendi yorumu.");
       }
+
+      console.log(`✅ Yeni kullanıcı yorumu (${pageId}). İlgili otomasyonlara gönderiliyor.`);
       
-      console.log(`✅ Yeni kullanıcı yorumu (${pageId}). Yorum otomasyonuna gönderiliyor.`);
-      await axios.post(COMMENT_WEBHOOK_URL, req.body);
-      return res.status(200).send("Yorum otomasyonuna gönderildi.");
+      // Yorumu aynı anda her iki otomasyona da gönder
+      await Promise.all([
+          axios.post(COMMENT_WEBHOOK_URL, req.body),
+          axios.post(PATTERN_REQUEST_WEBHOOK_URL, req.body)
+      ]);
+      
+      return res.status(200).send("Yorum, ilgili tüm otomasyonlara gönderildi.");
     }
 
     // Yukarıdaki koşullara uymayan diğer her şey
