@@ -16,7 +16,7 @@ const NEW_POST_WEBHOOK_URL = "https://hook.us2.make.com/uj2w7lpphvej3lmtudfpmhwn
 const PATTERN_REQUEST_WEBHOOK_URL = "https://hook.us2.make.com/rvcgwaursmfmu8gn2mkgxdkvrhyu8yay";
 
 // --- YENİ FİLTRE SABİTLERİ (Make Operasyonunu Azaltmak İçin) ---
-// 1. KRİTİK ANAHTAR KELİMELER (Bu kelimeler varsa, yorum KISA olsa bile filtrelenmez, Make'e gider)
+// 1. KRİTİK ÇOK DİLLİ ANAHTAR KELİMELER (Bu kelimeler varsa, yorum KISA bile olsa filtrelenmez, Make'e gider)
 const PATTERN_KEYWORDS = [
     // İngilizce
     "pattern", "tutorial", "pdf", "template", "description", 
@@ -151,22 +151,42 @@ app.post("/webhook", async (req, res) => {
         return res.status(200).send("Sayfanın kendi yorumu.");
       }
       
-      // 🚨 YENİ FİLTRELEME ADIMI: Basit/Alakasız yorumları Make'e göndermeden durdur
+      // 🚨 FİLTRELEME ADIMI: Basit/Alakasız yorumları Make'e göndermeden durdur
       if (isSimpleComment(commentMessage)) {
           console.log(`⛔ Basit/Kısa Yorum Filtresi. Make'e gönderilmedi: "${commentMessage}"`);
           return res.status(200).send("Yorum, basit filtreye takıldı. Make operasyonu harcanmadı.");
       }
-      // Filtreyi geçen yorumlar Make'e gönderilir (ve operasyon harcanır)
+      // Filtreyi geçen yorumlar Make'e gönderilir
 
       console.log(`✅ Yeni kullanıcı yorumu (${pageId}). İlgili otomasyonlara gönderiliyor. (Filtreyi geçti)`);
       
-      // Yorumu aynı anda her iki otomasyona da gönder
-      await Promise.all([
-          axios.post(COMMENT_WEBHOOK_URL, req.body),
-          axios.post(PATTERN_REQUEST_WEBHOOK_URL, req.body)
-      ]);
-      
-      return res.status(200).send("Yorum, ilgili tüm otomasyonlara gönderildi.");
+      // Yorumu ayrı ayrı gönder (Hata tespiti için Promise.all kaldırıldı)
+      let successful = true;
+
+      // 1. Yorum Otomasyonu Gönderimi
+      try {
+          await axios.post(COMMENT_WEBHOOK_URL, req.body);
+          console.log("✅ COMMENT_WEBHOOK_URL'e gönderim başarılı.");
+      } catch (error) {
+          successful = false;
+          console.error(`🚨 COMMENT_WEBHOOK_URL Hata: ${error.message}. Statu: ${error.response ? error.response.status : 'Bilinmiyor'}`);
+      }
+      
+      // 2. Pattern İstek Otomasyonu Gönderimi
+      try {
+          await axios.post(PATTERN_REQUEST_WEBHOOK_URL, req.body);
+          console.log("✅ PATTERN_REQUEST_WEBHOOK_URL'e gönderim başarılı.");
+      } catch (error) {
+          successful = false;
+          console.error(`🚨 PATTERN_REQUEST_WEBHOOK_URL Hata: ${error.message}. Statu: ${error.response ? error.response.status : 'Bilinmiyor'}`);
+      }
+      
+      if (successful) {
+          return res.status(200).send("Yorum, ilgili tüm otomasyonlara başarılı şekilde gönderildi.");
+      } else {
+           // En az bir gönderim başarısız olduysa bile Facebook'a 200 dönüyoruz (Retry'ı önlemek için)
+           return res.status(200).send("Yorum gönderimi denendi, bazı Make senaryolarında hata oluştu.");
+      }
     }
 
     // Yukarıdaki koşullara uymayan diğer her şey
@@ -174,7 +194,7 @@ app.post("/webhook", async (req, res) => {
     res.status(200).send("Gereksiz tetikleme.");
 
   } catch (error) {
-    console.error("🚨 Webhook işlenemedi:", error.message);
+    console.error("🚨 Webhook işlenemedi (Genel Hata):", error.message);
     res.sendStatus(500);
   }
 });
