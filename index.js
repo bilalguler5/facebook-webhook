@@ -7,13 +7,14 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// --- YENİ: REDIS BAĞLANTISI VE KONTROLÜ (HOST/PORT KULLANAN SAĞLAM YÖNTEM) ---
-const REDIS_HOST = process.env.REDIS_HOST;
-const REDIS_PORT = process.env.REDIS_PORT;
-const REDIS_PASSWORD = process.env.REDIS_PASSWORD; // Şifre varsa kullanılır
+// --- GÜNCEL VE SAĞLAM REDIS BAĞLANTISI (Railway'in BÜYÜK HARFLİ değişkenleri kullanıldı) ---
+// RAILWAY'DEN GELEN REDIS DEĞİŞKENLERİ: REDISHOST, REDISPORT, REDISPASSWORD
+const REDIS_HOST = process.env.REDISHOST;
+const REDIS_PORT = process.env.REDISPORT;
+const REDIS_PASSWORD = process.env.REDISPASSWORD;
 
 if (!REDIS_HOST || !REDIS_PORT) {
-    console.warn("🚨 Dikkat: REDIS_HOST veya REDIS_PORT ortam değişkeni tanımlı değil. Yorum kilitleme (tekilleştirme) çalışmayacaktır.");
+    console.warn("🚨 Dikkat: REDISHOST veya REDISPORT ortam değişkeni tanımlı değil. Yorum kilitleme (tekilleştirme) çalışmayacaktır.");
     var redis = null;
 } else {
     // Redis kütüphanesini Host, Port ve Password ile yapılandır
@@ -24,11 +25,10 @@ if (!REDIS_HOST || !REDIS_PORT) {
     });
 
     redis.on("error", (err) => {
-        // Hata logu sadece Host/Port üzerinden bağlantı denendiğinde çalışır.
-        // Hatanın sürekli tekrarlamaması için, bu log Redis bağlantı hatasını yakalar.
+        // Bu hata logu artık Host/Port hatasını net bir şekilde yakalayacak.
         console.error(`🚨 Redis Bağlantı Hatası: Sunucuya ulaşılamıyor (Host/Port ile denendi): ${err.message}`);
     });
-    redis.on("connect", () => console.log("✅ Redis'e başarıyla bağlandı. (Host/Port yöntemi)"));
+    redis.on("connect", () => console.log("✅ Redis'e başarıyla bağlandı. (Host/Port yöntemi ile kilit sistemi aktif)"));
 }
 
 // --- Sabitler ---
