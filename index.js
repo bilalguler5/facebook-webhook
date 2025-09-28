@@ -7,35 +7,58 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// --- GÜNCEL VE SAĞLAM REDIS BAĞLANTISI (Railway'in BÜYÜK HARFLİ değişkenleri kullanıldı) ---
-// RAILWAY'DEN GELEN REDIS DEĞİŞKENLERİ: REDISHOST, REDISPORT, REDISPASSWORD
-const REDIS_HOST = process.env.REDISHOST;
-const REDIS_PORT = process.env.REDISPORT;
-const REDIS_PASSWORD = process.env.REDISPASSWORD;
+// --- DÜZELTİLMİŞ REDIS BAĞLANTISI ---
+// Önce REDIS_URL'yi kontrol et, yoksa parçalı bağlantıyı kullan
+let redis = null;
 
-if (!REDIS_HOST || !REDIS_PORT) {
-    console.warn("🚨 Dikkat: REDISHOST veya REDISPORT ortam değişkeni tanımlı değil. Yorum kilitleme (tekilleştirme) çalışmayacaktır.");
-    var redis = null;
+if (process.env.REDIS_URL) {
+    // Railway'in sağladığı tam URL'yi kullan
+    redis = new Redis(process.env.REDIS_URL);
+    console.log("✅ Redis'e REDIS_URL ile bağlanılıyor...");
+} else if (process.env.REDISHOST && process.env.REDISPORT) {
+    // Alternatif: Host, Port ve Password ile bağlan
+    redis = new Redis({
+        host: process.env.REDISHOST,
+        port: parseInt(process.env.REDISPORT),
+        password: process.env.REDISPASSWORD || undefined,
+        // Ek güvenlik ayarları
+        retryStrategy: (times) => {
+            const delay = Math.min(times * 50, 2000);
+            return delay;
+        },
+        reconnectOnError: (err) => {
+            const targetError = "READONLY";
+            if (err.message.includes(targetError)) {
+                return true;
+            }
+            return false;
+        }
+    });
+    console.log("✅ Redis'e Host/Port ile bağlanılıyor...");
 } else {
-    // Redis kütüphanesini Host, Port ve Password ile yapılandır
-    var redis = new Redis({
-        host: REDIS_HOST,
-        port: REDIS_PORT,
-        password: REDIS_PASSWORD // Şifre tanımlıysa kullanılır
-    });
+    console.warn("🚨 Dikkat: Redis ortam değişkenleri tanımlı değil. Yorum kilitleme çalışmayacaktır.");
+}
 
+// Redis event listener'ları
+if (redis) {
     redis.on("error", (err) => {
-        // Bu hata logu artık Host/Port hatasını net bir şekilde yakalayacak.
-        console.error(`🚨 Redis Bağlantı Hatası: Sunucuya ulaşılamıyor (Host/Port ile denendi): ${err.message}`);
+        console.error(`🚨 Redis Bağlantı Hatası: ${err.message}`);
     });
-    redis.on("connect", () => console.log("✅ Redis'e başarıyla bağlandı. (Host/Port yöntemi ile kilit sistemi aktif)"));
+    
+    redis.on("connect", () => {
+        console.log("✅ Redis'e başarıyla bağlandı!");
+    });
+    
+    redis.on("ready", () => {
+        console.log("✅ Redis kullanıma hazır!");
+    });
 }
 
 // --- Sabitler ---
 const VERIFY_TOKEN = "Allah1dir.,";
 const PATTERN_REQUEST_WEBHOOK_URL = "https://hook.us2.make.com/rvcgwaursmfmu8gn2mkgxdkvrhyu8yay";
 
-// KRİTİK ÇOK DİLLİ ANAHTAR KELİMELER (Filtre mantığı korundu)
+// KRİTİK ÇOK DİLLİ ANAHTAR KELİMELER
 const PATTERN_KEYWORDS = [
     "pattern", "tutorial", "pdf", "template", "description", "guide", "chart", "instructions", "recipe", "how to",
     "patrón", "tutorial", "plantilla", "instrucciones", "receta", "como hacer",
@@ -68,9 +91,8 @@ function isSimpleComment(message) {
 
     return false;
 }
-// --- FİLTRE SABİTLERİ SONU ---
 
-// ✅ Otomasyonun çalışacağı izinli Facebook Sayfa ID'leri
+// ✅ İzinli Facebook Sayfa ID'leri
 const ALLOWED_PAGE_IDS = new Set([
     "768328876640929", "757013007687866", "708914999121089", "141535723466",
     "1606844446205856", "300592430012288", "1802019006694158", "105749897807346"
@@ -91,7 +113,7 @@ app.get("/webhook", (req, res) => {
     }
 });
 
-// 📩 Facebook → Webhook → İlgili Make Senaryolarına Yönlendirme
+// 📩 Facebook Webhook İşleyici
 app.post("/webhook", async (req, res) => {
     console.log("📨 Facebook'tan veri geldi:", JSON.stringify(req.body, null, 2));
 
@@ -99,7 +121,9 @@ app.post("/webhook", async (req, res) => {
         const entry = req.body.entry?.[0];
         const changes = entry?.changes?.[0];
 
-        if (!entry || !changes?.value) return res.status(200).send("Veri yapısı eksik, işlenmedi.");
+        if (!entry || !changes?.value) {
+            return res.status(200).send("Veri yapısı eksik, işlenmedi.");
+        }
 
         const item = changes.value.item;
         const verb = changes.value.verb;
@@ -114,84 +138,109 @@ app.post("/webhook", async (req, res) => {
             if (!ALLOWED_PAGE_IDS.has(pageId)) {
                 return res.status(200).send("Sayfa izinli değil.");
             }
+            
             if (fromId && fromId === pageId) {
                 return res.status(200).send("Sayfanın kendi yorumu.");
             }
             
-            // 🚨 REDIS KİLİT KONTROLÜ (Tekrar İşleme Önlemi)
+            // 🚨 REDIS KİLİT KONTROLÜ
             if (redis && commentId) {
-                const redisKey = `comment:${commentId}`;
-                const isProcessed = await redis.get(redisKey);
+                try {
+                    const redisKey = `comment:${commentId}`;
+                    const isProcessed = await redis.get(redisKey);
 
-                if (isProcessed) {
-                    console.log(`⛔ Yorum ID Redis'te Kilitli: ${commentId}. Daha önce işlenmiş. İşlenmedi.`);
-                    return res.status(200).send("Yorum daha önce işlenmiş (Redis Kilidi).");
+                    if (isProcessed) {
+                        console.log(`⛔ Yorum zaten işlenmiş (Redis): ${commentId}`);
+                        return res.status(200).send("Yorum daha önce işlenmiş.");
+                    }
+                } catch (redisError) {
+                    console.error(`Redis okuma hatası: ${redisError.message}`);
+                    // Redis hatası durumunda işleme devam et
                 }
             }
             
-            // 🚨 FİLTRELEME ADIMI
+            // 🚨 FİLTRELEME
             if (isSimpleComment(commentMessage)) {
-                console.log(`⛔ Basit/Kısa Yorum Filtresi. Make'e gönderilmedi: "${commentMessage}"`);
-                return res.status(200).send("Yorum, basit filtreye takıldı. Make operasyonu harcanmadı.");
+                console.log(`⛔ Basit yorum filtrelendi: "${commentMessage}"`);
+                return res.status(200).send("Basit yorum, işlenmedi.");
             }
 
-            console.log(`✅ Yeni kullanıcı yorumu (${pageId}). Pattern Otomasyonuna gönderiliyor. (Filtreyi ve Kilidi geçti)`);
+            console.log(`✅ Yeni yorum işleniyor: ${commentId}`);
             
             let successful = true;
 
-            // Pattern İstek Otomasyonu Gönderimi
+            // Make.com'a gönder
             try {
                 await axios.post(PATTERN_REQUEST_WEBHOOK_URL, req.body);
-                console.log("✅ PATTERN_REQUEST_WEBHOOK_URL'e gönderim başarılı.");
+                console.log("✅ Make.com'a başarıyla gönderildi.");
             } catch (error) {
                 successful = false;
-                console.error(`🚨 PATTERN_REQUEST_WEBHOOK_URL Hata: ${error.message}. Statu: ${error.response ? error.response.status : 'Bilinmiyor'}`);
+                console.error(`🚨 Make.com gönderim hatası: ${error.message}`);
             }
             
-            // --- BAŞARILI GÖNDERİM SONRASI REDIS'E KİLİT KOYMA ---
+            // Başarılıysa Redis'e kaydet
             if (successful && redis && commentId) {
-                const redisKey = `comment:${commentId}`;
-                // Kilit süresi: 30 gün (2592000 saniye)
-                await redis.set(redisKey, "1", "EX", 2592000); 
-                console.log(`✅ Yorum ID Redis'e kilitlendi: ${commentId}`);
+                try {
+                    const redisKey = `comment:${commentId}`;
+                    // 30 gün boyunca sakla
+                    await redis.set(redisKey, "1", "EX", 2592000);
+                    console.log(`✅ Yorum Redis'e kaydedildi: ${commentId}`);
+                } catch (redisError) {
+                    console.error(`Redis yazma hatası: ${redisError.message}`);
+                }
             }
 
-            if (successful) {
-                return res.status(200).send("Yorum, Pattern otomasyonuna başarılı şekilde gönderildi.");
-            } else {
-                return res.status(200).send("Yorum gönderimi denendi, Pattern senaryosunda hata oluştu.");
-            }
+            return res.status(200).send(successful ? 
+                "Yorum başarıyla işlendi." : 
+                "Yorum işlenemedi."
+            );
         }
 
-        console.log(`⛔ Gereksiz tetikleme (${item}, ${verb}). İşlenmedi.`);
-        res.status(200).send("Gereksiz tetikleme.");
+        console.log(`⛔ Farklı tetikleme: ${item}, ${verb}`);
+        res.status(200).send("Diğer olay tipi.");
 
     } catch (error) {
-        console.error("🚨 Webhook işlenemedi (Genel Hata):", error.message);
+        console.error("🚨 Webhook işleme hatası:", error.message);
         res.sendStatus(500);
     }
 });
 
-// --- Diğer Endpoint'ler (Değişiklik Yok) ---
+// --- OAuth Endpoint'leri ---
 const APP_ID = "1203840651490478";
 const APP_SECRET = "de926e19322760edf3b377e0255469de";
 const REDIRECT_URI = "https://facebook-webhook-production-410a.up.railway.app/auth";
 
 app.get("/", (req, res) => {
     const oauthLink = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${APP_ID}&redirect_uri=${REDIRECT_URI}&scope=pages_manage_metadata,pages_read_engagement,pages_show_list&response_type=code`;
-    res.send(`<html><head><title>Facebook OAuth</title></head><body><h1>Facebook OAuth için buradayız</h1><a href="${oauthLink}" target="_blank">👉 Facebook Sayfa Yetkisi Ver</a></body></html>`);
+    res.send(`
+        <html>
+        <head><title>Facebook OAuth</title></head>
+        <body>
+            <h1>Facebook OAuth</h1>
+            <a href="${oauthLink}" target="_blank">👉 Facebook Sayfa Yetkisi Ver</a>
+        </body>
+        </html>
+    `);
 });
 
 app.get("/auth", async (req, res) => {
     const code = req.query.code;
     if (!code) return res.send("❌ Authorization kodu alınamadı.");
+    
     try {
-        const result = await axios.get("https://graph.facebook.com/v19.0/oauth/access_token", { params: { client_id: APP_ID, client_secret: APP_SECRET, redirect_uri: REDIRECT_URI, code } });
-        console.log("✅ Facebook Access Token:", result.data.access_token);
-        res.send("✅ Access Token alındı! Loglara bakabilirsin.");
+        const result = await axios.get("https://graph.facebook.com/v19.0/oauth/access_token", {
+            params: {
+                client_id: APP_ID,
+                client_secret: APP_SECRET,
+                redirect_uri: REDIRECT_URI,
+                code
+            }
+        });
+        console.log("✅ Access Token alındı:", result.data.access_token);
+        res.send("✅ Access Token alındı! Loglara bakın.");
     } catch (err) {
-        console.error("🚨 Access Token alma hatası:", err.message);
-        res.send("❌ Token alma işlemi başarısız.");
+        console.error("🚨 Access Token hatası:", err.message);
+        res.send("❌ Token alınamadı.");
     }
 });
 
@@ -201,23 +250,40 @@ app.get("/pages", async (req, res) => {
         const response = await axios.get(`https://graph.facebook.com/v19.0/me/accounts?access_token=${accessToken}`);
         res.json(response.data);
     } catch (error) {
-        console.error("🚨 Sayfa listesi alınamadı:", error.message);
-        res.status(500).send("❌ Sayfa listesi getirilemedi.");
+        console.error("🚨 Sayfa listesi hatası:", error.message);
+        res.status(500).send("❌ Sayfa listesi alınamadı.");
     }
 });
 
 app.post("/subscribe", async (req, res) => {
     const { pageId, pageAccessToken } = req.body;
     try {
-        await axios.post(`https://graph.facebook.com/v19.0/${pageId}/subscribed_apps`, {}, { headers: { Authorization: `Bearer ${pageAccessToken}` } });
-        res.send("✅ Webhook başarılı şekilde abone oldu.");
+        await axios.post(`https://graph.facebook.com/v19.0/${pageId}/subscribed_apps`, {}, {
+            headers: { Authorization: `Bearer ${pageAccessToken}` }
+        });
+        res.send("✅ Webhook abone olundu.");
     } catch (error) {
         console.error("🚨 Abonelik hatası:", error.message);
         res.status(500).send("❌ Webhook aboneliği başarısız.");
     }
 });
 
-// 🚀 Server Başlat
+// Health check endpoint
+app.get("/health", async (req, res) => {
+    const health = {
+        status: "OK",
+        redis: redis ? await redis.ping() === "PONG" : false,
+        timestamp: new Date().toISOString()
+    };
+    res.json(health);
+});
+
+// 🚀 Server'ı başlat
 app.listen(PORT, () => {
-    console.log(`🚀 Server çalışıyor: http://localhost:${PORT}`);
+    console.log(`🚀 Server ${PORT} portunda çalışıyor`);
+    if (redis) {
+        console.log("📦 Redis bağlantısı kontrol ediliyor...");
+    } else {
+        console.log("⚠️ Redis bağlantısı yok - yorum kilitleme devre dışı!");
+    }
 });
