@@ -7,7 +7,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// Redis Bağlantısı - DÜZELTİLDİ
+// Redis Bağlantısı
 let redis = null;
 
 if (process.env.REDIS_URL) {
@@ -173,30 +173,27 @@ app.post("/webhook", async (req, res) => {
             return res.status(200).send("Basit yorum");
         }
 
-        // 7. Redis Duplicate Kontrolü - DÜZELTİLDİ
+        // 7. Redis Duplicate Kontrolü - SETNX İLE
         if (redis) {
             try {
                 const redisKey = `comment:${commentId}`;
                 console.log(`🔍 Redis kontrol: ${redisKey}`);
                 
-                // Redis'ten değeri al
-                const existingValue = await redis.get(redisKey);
-                console.log(`📊 Redis değeri: "${existingValue}" (tip: ${typeof existingValue})`);
+                // SETNX - Atomik işlem (SET if Not eXists)
+                const result = await redis.setnx(redisKey, "1");
+                console.log(`📊 SETNX sonucu: ${result}`);
                 
-                // Daha sıkı kontrol - string "1" olup olmadığını kontrol et
-                if (existingValue === "1" || existingValue === 1) {
+                if (result === 0) {
+                    // 0 = Key zaten var, DUPLICATE!
                     console.log(`⛔ DUPLICATE BULUNDU! ${commentId}`);
                     return res.status(200).send("Duplicate");
-                }
-                
-                // null veya undefined ise yeni kayıt
-                if (existingValue === null || existingValue === undefined) {
-                    const setResult = await redis.set(redisKey, "1", "EX", 2592000);
-                    console.log(`✅ Redis'e yeni kayıt: ${commentId} (sonuç: ${setResult})`);
+                } else if (result === 1) {
+                    // 1 = Yeni eklendi
+                    await redis.expire(redisKey, 2592000); // 30 gün
+                    console.log(`✅ Redis'e yeni kayıt: ${commentId}`);
                 } else {
                     // Beklenmeyen değer
-                    console.log(`⚠️ Redis'te beklenmeyen değer: "${existingValue}"`);
-                    return res.status(200).send("Unexpected Redis value");
+                    console.log(`⚠️ SETNX beklenmeyen değer döndü: ${result}`);
                 }
                 
             } catch (redisError) {
@@ -236,7 +233,7 @@ app.post("/webhook", async (req, res) => {
     }
 });
 
-// Test endpoint
+// Test endpoint - DETAYLI TEST
 app.get("/test-redis/:commentId", async (req, res) => {
     if (!redis) {
         return res.json({ error: "Redis not connected" });
@@ -244,15 +241,31 @@ app.get("/test-redis/:commentId", async (req, res) => {
     
     const commentId = req.params.commentId;
     const key = `comment:${commentId}`;
-    const value = await redis.get(key);
     
-    res.json({
-        key: key,
-        value: value,
-        valueType: typeof value,
-        exists: value !== null && value !== undefined,
-        isOne: value === "1" || value === 1
-    });
+    try {
+        // GET ile kontrol
+        const getValue = await redis.get(key);
+        
+        // EXISTS ile kontrol
+        const exists = await redis.exists(key);
+        
+        // SETNX testi
+        const testKey = `test:${Date.now()}`;
+        const setnxResult = await redis.setnx(testKey, "test");
+        await redis.del(testKey);
+        
+        res.json({
+            key: key,
+            getValue: getValue,
+            getType: typeof getValue,
+            exists: exists,
+            existsResult: exists === 1 ? "VAR" : "YOK",
+            isOne: getValue === "1",
+            setnxTest: setnxResult === 1 ? "SETNX çalışıyor" : "SETNX sorunu var"
+        });
+    } catch (err) {
+        res.json({ error: err.message });
+    }
 });
 
 // Health Check
@@ -303,6 +316,7 @@ app.get("/", (req, res) => {
             <p><strong>Redis:</strong> ${redis ? "✅ Bağlı" : "❌ Bağlı Değil"}</p>
             <p><a href="${oauthLink}">👉 Facebook Sayfa Yetkisi Ver</a></p>
             <p><a href="/health">📊 Sistem Durumu</a></p>
+            <p><a href="/test-redis/test123">🔍 Redis Test</a></p>
         </body>
         </html>
     `);
