@@ -112,18 +112,20 @@ app.get("/webhook", (req, res) => {
 
 // Ana Webhook Handler
 app.post("/webhook", async (req, res) => {
-    console.log("📨 Facebook'tan veri geldi");
+    // Detaylı log
+    const entry = req.body.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const eventType = changes?.value?.item || "bilinmeyen";
+    const verb = changes?.value?.verb || "";
+    
+    console.log(`📨 Facebook'tan ${eventType} verisi geldi (${verb})`);
 
     try {
-        const entry = req.body.entry?.[0];
-        const changes = entry?.changes?.[0];
-
         if (!entry || !changes?.value) {
             return res.status(200).send("Eksik veri");
         }
 
         const item = changes.value.item;
-        const verb = changes.value.verb;
         const pageId = entry.id;
         const fromId = changes.value.from?.id;
         const commentId = changes.value.comment_id;
@@ -170,22 +172,22 @@ app.post("/webhook", async (req, res) => {
                 const redisKey = `comment:${commentId}`;
                 console.log(`🔍 Redis kontrol: ${redisKey}`);
                 
-                // Duplicate kontrolü
+                // Mevcut değeri kontrol et
                 const existingValue = await redis.get(redisKey);
+                console.log(`📊 Redis değeri: ${existingValue}`);
                 
-                if (existingValue) {
-                    console.log(`⛔ DUPLICATE BULUNDU! ${commentId}`);
-                    console.log(`📊 Mevcut değer: ${existingValue}`);
+                if (existingValue !== null && existingValue !== undefined) {
+                    // Kayıt var - DUPLICATE!
+                    console.log(`⛔ DUPLICATE BULUNDU! ${commentId} (değer: ${existingValue})`);
                     return res.status(200).send("Duplicate");
                 }
                 
-                // Duplicate değilse ve tüm kontrollerden geçtiyse Redis'e kaydet
-                await redis.set(redisKey, "1", "EX", 2592000); // 30 gün
-                console.log(`✅ Redis'e kaydedildi: ${commentId} (30 gün)`);
+                // Kayıt yok, yeni ekle
+                const setResult = await redis.set(redisKey, "1", "EX", 2592000); // 30 gün
+                console.log(`✅ Redis'e kaydedildi: ${commentId} (sonuç: ${setResult})`);
                 
             } catch (redisError) {
                 console.error(`🚨 Redis hatası: ${redisError.message}`);
-                // Redis hatası durumunda işlemi durdur
                 return res.status(503).send("Redis hatası");
             }
         } else {
@@ -219,6 +221,23 @@ app.post("/webhook", async (req, res) => {
         console.error("🚨 Genel hata:", error);
         res.sendStatus(500);
     }
+});
+
+// Test endpoint
+app.get("/test-redis/:commentId", async (req, res) => {
+    if (!redis) {
+        return res.json({ error: "Redis not connected" });
+    }
+    
+    const commentId = req.params.commentId;
+    const key = `comment:${commentId}`;
+    const value = await redis.get(key);
+    
+    res.json({
+        key: key,
+        value: value,
+        exists: value !== null
+    });
 });
 
 // Health Check
@@ -310,21 +329,4 @@ app.listen(PORT, () => {
     if (!redis) {
         console.error("⚠️ DİKKAT: Redis olmadan duplicate kontrolü çalışmaz!");
     }
-});
-
-// Health endpoint'inden sonra ekleyin
-app.get("/test-redis/:commentId", async (req, res) => {
-    if (!redis) {
-        return res.json({ error: "Redis not connected" });
-    }
-    
-    const commentId = req.params.commentId;
-    const key = `comment:${commentId}`;
-    const value = await redis.get(key);
-    
-    res.json({
-        key: key,
-        value: value,
-        exists: value !== null
-    });
 });
