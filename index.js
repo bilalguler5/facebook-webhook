@@ -1,5 +1,5 @@
 const express = require("express");
-const axios = require =("axios");
+const axios = require("axios"); // HATA DÜZELTİLDİ: ' = ' işareti kaldırıldı
 const Redis = require("ioredis");
 
 const app = express();
@@ -58,10 +58,6 @@ const SHORT_COMMENT_THRESHOLD = 10;
 
 /**
  * Bir yorumun KURAL DIŞI bırakılıp bırakılmayacağını kontrol eder.
- *
- * Yorum KISA DEĞİLSE veya KISA OLMASINA RAĞMEN PATTERN İSTİYORSA: false döner (İşlenmeli)
- * Yorum KISA VE PATTERN İSTEMİYORSA: true döner (Atlanmalı)
- * * @param {string} message Yorum metni
  * @returns {boolean} Yorumun ATLANMASI GEREKİYORSA true, aksi takdirde false.
  */
 function shouldSkipComment(message) {
@@ -69,13 +65,13 @@ function shouldSkipComment(message) {
     
     const cleanMessage = message.trim().toLowerCase();
     
-    // KURAL 2: Yorum 10 karakterden uzunsa ATLANMAZ (False döner).
+    // KURAL 1: Yorum 10 karakterden uzunsa ATLANMAZ (False döner).
     if (cleanMessage.length >= SHORT_COMMENT_THRESHOLD) {
         console.log(`✅ Yorum ${SHORT_COMMENT_THRESHOLD} karakterden uzun. İşlenmeye devam edilecek.`);
         return false;
     }
     
-    // KURAL 3 (İSTİSNA): Yorum kısaysa (10 karakterden az) Pattern kelimelerini kontrol et.
+    // KURAL 2 (İSTİSNA): Yorum kısaysa (10 karakterden az) Pattern kelimelerini kontrol et.
     for (const keyword of PATTERN_KEYWORDS) {
         if (cleanMessage.includes(keyword)) {
             console.log(`✅ Yorum kısa (< ${SHORT_COMMENT_THRESHOLD} karakter) AMA Pattern anahtar kelimesi ("${keyword}") içeriyor. İşlenmeye devam edilecek.`);
@@ -83,7 +79,7 @@ function shouldSkipComment(message) {
         }
     }
     
-    // SONUÇ: Yorum 10 karakterden kısadır VE Pattern kelimesi içermemektedir.
+    // SONUÇ: Yorum 10 karakterden kısadır VE Pattern kelimesi içermemektedir. ATLANIR.
     console.log(`⛔ Yorum kısa (< ${SHORT_COMMENT_THRESHOLD} karakter) VE Pattern istemiyor. Atlanıyor.`);
     return true;
 }
@@ -152,7 +148,7 @@ app.post("/webhook", async (req, res) => {
             return console.log("⛔ Mesaj içeriği yok. Atlanıyor.");
         }
         
-        // 2. Yeni Kural: Yorumu Atla (Skip) Kuralı
+        // 2. Yorumu Atla (Skip) Kuralı
         if (shouldSkipComment(commentMessage)) {
             return console.log("⛔ Yorum kural dışı bırakıldı (Çok kısa ve Pattern istemiyor). İşlem durduruldu.");
         }
@@ -163,6 +159,7 @@ app.post("/webhook", async (req, res) => {
             console.log(`🔍 Redis kontrol (Atomik SET NX): ${redisKey}`);
             
             // Atomik SET NX komutu: commentId anahtarını SADECE HİÇ YOKSA (NX) ayarlar.
+            // EX 2592000 = 30 gün
             const setResult = await redis.set(redisKey, "1", "EX", 2592000, "NX");
             
             if (setResult === 'OK') {
