@@ -311,3 +311,20 @@ app.listen(PORT, () => {
         console.error("⚠️ DİKKAT: Redis olmadan duplicate kontrolü çalışmaz!");
     }
 });
+
+// Health endpoint'inden sonra ekleyin
+app.get("/test-redis/:commentId", async (req, res) => {
+    if (!redis) {
+        return res.json({ error: "Redis not connected" });
+    }
+    
+    const commentId = req.params.commentId;
+    const key = `comment:${commentId}`;
+    const value = await redis.get(key);
+    
+    res.json({
+        key: key,
+        value: value,
+        exists: value !== null
+    });
+});
