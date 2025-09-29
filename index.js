@@ -7,19 +7,26 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// Redis Bağlantısı
+// Redis Bağlantısı - DÜZELTİLDİ
 let redis = null;
 
 if (process.env.REDIS_URL) {
-    redis = new Redis(process.env.REDIS_URL);
+    redis = new Redis(process.env.REDIS_URL, {
+        maxRetriesPerRequest: 3,
+        enableReadyCheck: true,
+        lazyConnect: false,
+        retryStrategy: (times) => Math.min(times * 50, 2000)
+    });
     console.log("✅ Redis'e REDIS_URL ile bağlanılıyor...");
 } else if (process.env.REDISHOST && process.env.REDISPORT) {
     redis = new Redis({
         host: process.env.REDISHOST,
         port: parseInt(process.env.REDISPORT),
         password: process.env.REDISPASSWORD || undefined,
-        retryStrategy: (times) => Math.min(times * 50, 2000),
-        reconnectOnError: (err) => err.message.includes("READONLY")
+        maxRetriesPerRequest: 3,
+        enableReadyCheck: true,
+        lazyConnect: false,
+        retryStrategy: (times) => Math.min(times * 50, 2000)
     });
     console.log("✅ Redis'e Host/Port ile bağlanılıyor...");
 } else {
@@ -160,31 +167,37 @@ app.post("/webhook", async (req, res) => {
             return res.status(200).send("Mesaj yok");
         }
 
-        // 6. Basit yorum kontrolü (Redis'e yazmadan önce)
+        // 6. Basit yorum kontrolü
         if (isSimpleComment(commentMessage)) {
             console.log(`⛔ Basit yorum: "${commentMessage.substring(0, 50)}..."`);
             return res.status(200).send("Basit yorum");
         }
 
-        // 7. Redis Duplicate Kontrolü (Tüm filtrelerden geçtikten sonra)
+        // 7. Redis Duplicate Kontrolü - DÜZELTİLDİ
         if (redis) {
             try {
                 const redisKey = `comment:${commentId}`;
                 console.log(`🔍 Redis kontrol: ${redisKey}`);
                 
-                // Mevcut değeri kontrol et
+                // Redis'ten değeri al
                 const existingValue = await redis.get(redisKey);
-                console.log(`📊 Redis değeri: ${existingValue}`);
+                console.log(`📊 Redis değeri: "${existingValue}" (tip: ${typeof existingValue})`);
                 
-                if (existingValue !== null && existingValue !== undefined) {
-                    // Kayıt var - DUPLICATE!
-                    console.log(`⛔ DUPLICATE BULUNDU! ${commentId} (değer: ${existingValue})`);
+                // Daha sıkı kontrol - string "1" olup olmadığını kontrol et
+                if (existingValue === "1" || existingValue === 1) {
+                    console.log(`⛔ DUPLICATE BULUNDU! ${commentId}`);
                     return res.status(200).send("Duplicate");
                 }
                 
-                // Kayıt yok, yeni ekle
-                const setResult = await redis.set(redisKey, "1", "EX", 2592000); // 30 gün
-                console.log(`✅ Redis'e kaydedildi: ${commentId} (sonuç: ${setResult})`);
+                // null veya undefined ise yeni kayıt
+                if (existingValue === null || existingValue === undefined) {
+                    const setResult = await redis.set(redisKey, "1", "EX", 2592000);
+                    console.log(`✅ Redis'e yeni kayıt: ${commentId} (sonuç: ${setResult})`);
+                } else {
+                    // Beklenmeyen değer
+                    console.log(`⚠️ Redis'te beklenmeyen değer: "${existingValue}"`);
+                    return res.status(200).send("Unexpected Redis value");
+                }
                 
             } catch (redisError) {
                 console.error(`🚨 Redis hatası: ${redisError.message}`);
@@ -195,7 +208,7 @@ app.post("/webhook", async (req, res) => {
             return res.status(503).send("Redis yok");
         }
 
-        // 8. Tüm kontrollerden geçti, Make.com'a gönder
+        // 8. Make.com'a gönder
         console.log(`✅ Pattern yorumu, Make.com'a gönderiliyor: ${commentId}`);
 
         try {
@@ -208,10 +221,10 @@ app.post("/webhook", async (req, res) => {
         } catch (error) {
             console.error(`🚨 Make.com hatası: ${error.message}`);
             
-            // Make.com hatası durumunda Redis'ten sil (tekrar denenebilsin)
+            // Hata durumunda Redis'ten sil
             if (redis) {
                 await redis.del(`comment:${commentId}`);
-                console.log(`🗑️ Make.com hatası nedeniyle Redis'ten silindi: ${commentId}`);
+                console.log(`🗑️ Make.com hatası, Redis'ten silindi: ${commentId}`);
             }
             
             return res.status(500).send("Make.com hatası");
@@ -236,7 +249,9 @@ app.get("/test-redis/:commentId", async (req, res) => {
     res.json({
         key: key,
         value: value,
-        exists: value !== null
+        valueType: typeof value,
+        exists: value !== null && value !== undefined,
+        isOne: value === "1" || value === 1
     });
 });
 
@@ -245,30 +260,22 @@ app.get("/health", async (req, res) => {
     try {
         let redisStatus = false;
         let redisKeyCount = 0;
-        let testResult = null;
         
         if (redis) {
-            // Test
             const testKey = `health:${Date.now()}`;
             await redis.set(testKey, "test", "EX", 10);
             const value = await redis.get(testKey);
             redisStatus = value === "test";
             await redis.del(testKey);
             
-            // Toplam comment sayısı
             const keys = await redis.keys("comment:*");
             redisKeyCount = keys.length;
-            
-            testResult = { 
-                status: redisStatus ? "OK" : "ERROR",
-                totalComments: redisKeyCount 
-            };
         }
         
         res.json({
             status: "OK",
             redis: redisStatus,
-            redisTest: testResult,
+            totalComments: redisKeyCount,
             timestamp: new Date().toISOString()
         });
     } catch (error) {
@@ -315,7 +322,7 @@ app.get("/auth", async (req, res) => {
             }
         });
         console.log("✅ Access Token:", result.data.access_token);
-        res.send("✅ Token alındı! Console'u kontrol edin.");
+        res.send("✅ Token alındı!");
     } catch (err) {
         console.error("Token hatası:", err.message);
         res.send("Token alınamadı");
@@ -326,7 +333,4 @@ app.get("/auth", async (req, res) => {
 app.listen(PORT, () => {
     console.log(`🚀 Server ${PORT} portunda başladı`);
     console.log(`📦 Redis: ${redis ? "✅ Bağlı" : "❌ BAĞLI DEĞİL"}`);
-    if (!redis) {
-        console.error("⚠️ DİKKAT: Redis olmadan duplicate kontrolü çalışmaz!");
-    }
 });
