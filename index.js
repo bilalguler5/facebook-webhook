@@ -1,5 +1,5 @@
 const express = require("express");
-const axios = require("axios"); // HATA DÜZELTİLDİ: ' = ' işareti kaldırıldı
+const axios = require("axios");
 const Redis = require("ioredis");
 
 const app = express();
@@ -155,11 +155,14 @@ app.post("/webhook", async (req, res) => {
 
         // 3. Redis Duplicate Kontrolü (ATOMİK VE KESİN ÇÖZÜM)
         if (redis) {
+            // KRİTİK EKLEME: Çok yakın aralıklarla gelen duplicate istekler için 500ms bekle.
+            // Bu, ilk isteğin atomik SET işlemini tamamlaması için yeterli süreyi tanır.
+            await new Promise(resolve => setTimeout(resolve, 500)); 
+            
             const redisKey = `comment:${commentId}`;
-            console.log(`🔍 Redis kontrol (Atomik SET NX): ${redisKey}`);
+            console.log(`🔍 Redis kontrol (Atomik SET NX) Gecikme Sonrası: ${redisKey}`);
             
             // Atomik SET NX komutu: commentId anahtarını SADECE HİÇ YOKSA (NX) ayarlar.
-            // EX 2592000 = 30 gün
             const setResult = await redis.set(redisKey, "1", "EX", 2592000, "NX");
             
             if (setResult === 'OK') {
