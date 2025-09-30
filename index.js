@@ -7,19 +7,11 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// Redis Bağlantısı (URL/Host-Port)
+// Redis Bağlantısı
 let redis = null;
 
-if (process.env.REDIS_URL || (process.env.REDISHOST && process.env.REDISPORT)) {
-    const redisConfig = process.env.REDIS_URL 
-        ? process.env.REDIS_URL 
-        : {
-            host: process.env.REDISHOST,
-            port: parseInt(process.env.REDISPORT),
-            password: process.env.REDISPASSWORD || undefined,
-        };
-        
-    redis = new Redis(redisConfig, {
+if (process.env.REDIS_URL) {
+    redis = new Redis(process.env.REDIS_URL, {
         maxRetriesPerRequest: 3,
         enableReadyCheck: true,
         lazyConnect: false,
@@ -27,68 +19,80 @@ if (process.env.REDIS_URL || (process.env.REDISHOST && process.env.REDISPORT)) {
     });
     console.log("✅ Redis'e bağlanılıyor...");
 } else {
-    console.error("🚨 HATA: Redis bağlantı değişkenleri eksik! Duplicate kontrolü yapılamayacak.");
+    console.error("🚨 Redis bağlantısı kurulamadı!");
 }
 
-// Redis Event Listeners
 if (redis) {
     redis.on("error", (err) => console.error(`🚨 Redis Hatası: ${err.message}`));
     redis.on("connect", () => console.log("✅ Redis'e bağlandı!"));
     redis.on("ready", () => console.log("✅ Redis hazır!"));
 }
 
-// Sabitler
 const VERIFY_TOKEN = "Allah1dir.,";
 const PATTERN_REQUEST_WEBHOOK_URL = "https://hook.us2.make.com/rvcgwaursmfmu8gn2mkgxdkvrhyu8yay";
 
-// Pattern Anahtar Kelimeleri (Bu listeden biri geçiyorsa kısa yorum bile gitmeli)
+// GÜNCELLENMİŞ Pattern Kelimeleri - Çok dilli
 const PATTERN_KEYWORDS = [
-    "pattern", "tutorial", "pdf", "template", "guide", "chart", 
-    "instructions", "recipe", "how to", "video", "anlatım", "tarif",
-    "patrón", "plantilla", "instrucciones", "receta", "como hacer",
-    "padrão", "molde", "instruções", "receita", "como fazer",
-    "schema", "modello", "istruzioni", "ricetta", "come fare", "spiegazioni",
-    "anleitung", "muster", "schablone", "beschreibung", "wie man",
-    "patron", "tutoriel", "modèle", "comment faire",
-    "where i get the pattern", "where i find the pattern", "do you have the pattern",
-    "can i have the pattern", "how do i get the pattern", "where is the pattern"
+    // İngilizce
+    "pattern", "tutorial", "pdf", "template", "guide", "chart", "instructions", 
+    "recipe", "how to", "video", "link", "shop", "etsy", "buy", "where", 
+    "please", "where to buy", "cost", "price", "purchase", "order",
+    
+    // Türkçe
+    "anlatım", "tarif", "yapılışı", "nereden", "link", "fiyat",
+    
+    // İspanyolca  
+    "patrón", "plantilla", "instrucciones", "receta", "como hacer", "donde", 
+    "por favor", "comprar", "precio", "tienda",
+    
+    // Fransızca
+    "patron", "tutoriel", "modèle", "comment faire", "s'il vous plaît", 
+    "acheter", "où", "boutique", "prix",
+    
+    // Almanca
+    "anleitung", "muster", "schablone", "beschreibung", "wie man", "bitte",
+    "kaufen", "wo", "preis", "shop",
+    
+    // Portekizce
+    "padrão", "molde", "instruções", "receita", "como fazer", "onde",
+    "por favor", "comprar", "preço", "loja",
+    
+    // İtalyanca
+    "schema", "modello", "istruzioni", "ricetta", "come fare", "dove",
+    "per favore", "comprare", "prezzo", "negozio"
 ];
 
 const SHORT_COMMENT_THRESHOLD = 10;
 
-/**
- * Bir yorumun KURAL DIŞI bırakılıp bırakılmayacağını kontrol eder.
- * @returns {boolean} Yorumun ATLANMASI GEREKİYORSA true, aksi takdirde false.
- */
+const ALLOWED_PAGE_IDS = new Set([
+    "768328876640929", "757013007687866", "708914999121089", "141535723466",
+    "1606844446205856", "300592430012288", "1802019006694158", "105749897807346"
+]);
+
+// Yorum Filtreleme Mantığı
 function shouldSkipComment(message) {
     if (!message || message === "undefined" || message === "null") return true;
     
     const cleanMessage = message.trim().toLowerCase();
     
-    // KURAL 1: Yorum 10 karakterden uzunsa ATLANMAZ (False döner).
+    // 10 karakterden uzunsa direkt geçir
     if (cleanMessage.length >= SHORT_COMMENT_THRESHOLD) {
-        console.log(`✅ Yorum ${SHORT_COMMENT_THRESHOLD} karakterden uzun. İşlenmeye devam edilecek.`);
+        console.log(`✅ Yorum ${SHORT_COMMENT_THRESHOLD}+ karakter, geçiyor`);
         return false;
     }
     
-    // KURAL 2 (İSTİSNA): Yorum kısaysa (10 karakterden az) Pattern kelimelerini kontrol et.
+    // 10 karakterden kısaysa pattern kelimesi ara
     for (const keyword of PATTERN_KEYWORDS) {
         if (cleanMessage.includes(keyword)) {
-            console.log(`✅ Yorum kısa (< ${SHORT_COMMENT_THRESHOLD} karakter) AMA Pattern anahtar kelimesi ("${keyword}") içeriyor. İşlenmeye devam edilecek.`);
+            console.log(`✅ Kısa yorum ama pattern kelimesi var: "${keyword}"`);
             return false;
         }
     }
     
-    // SONUÇ: Yorum 10 karakterden kısadır VE Pattern kelimesi içermemektedir. ATLANIR.
-    console.log(`⛔ Yorum kısa (< ${SHORT_COMMENT_THRESHOLD} karakter) VE Pattern istemiyor. Atlanıyor.`);
+    // Kısa ve pattern kelimesi yok = ATLA
+    console.log(`⛔ Kısa yorum, pattern istemiyor: "${cleanMessage}"`);
     return true;
 }
-
-// İzinli Facebook Sayfa ID'leri
-const ALLOWED_PAGE_IDS = new Set([
-    "768328876640929", "757013007687866", "708914999121089", "141535723466",
-    "1606844446205856", "300592430012288", "1802019006694158", "105749897807346"
-]);
 
 // Webhook Doğrulama
 app.get("/webhook", (req, res) => {
@@ -100,22 +104,21 @@ app.get("/webhook", (req, res) => {
         console.log("✅ Webhook doğrulandı");
         res.status(200).send(challenge);
     } else {
-        console.warn("⛔ Webhook doğrulama başarısız");
         res.sendStatus(403);
     }
 });
 
 // Ana Webhook Handler
 app.post("/webhook", async (req, res) => {
-    // Facebook webhook'tan gelen veriyi anında kabul et ve arka planda işle
-    res.status(200).send("OK: İşleniyor");
+    // Hemen OK dön (Facebook timeout önleme)
+    res.status(200).send("OK");
 
     const entry = req.body.entry?.[0];
     const changes = entry?.changes?.[0];
 
     try {
         if (!entry || !changes?.value) {
-            return console.log("⛔ Eksik veya geçersiz Facebook verisi.");
+            return console.log("⛔ Eksik veri");
         }
 
         const item = changes.value.item;
@@ -125,183 +128,120 @@ app.post("/webhook", async (req, res) => {
         const commentId = changes.value.comment_id;
         const commentMessage = changes.value.message;
         
-        console.log(`\n================================`);
-        console.log(`📨 Facebook'tan ${item} verisi geldi (Eylem: ${verb})`);
-        console.log(`💬 Yorum: ${commentMessage ? commentMessage.substring(0, 50) + "..." : "Yok"}`);
-        console.log(`================================`);
+        console.log(`\n📨 ${item} geldi (${verb}) - ID: ${commentId}`);
+        console.log(`💬 Mesaj: ${commentMessage?.substring(0, 50)}...`);
 
-
-        // 1. Ön Koşullar ve Veri Tipi Kontrolü
+        // Temel kontroller
         if (item !== "comment" || verb !== "add") {
-            return console.log(`⛔ ${item} veya ${verb} işlemi. Atlanıyor.`);
+            return console.log("⛔ Yorum değil");
         }
         if (!ALLOWED_PAGE_IDS.has(pageId)) {
-            return console.log(`⛔ İzinsiz sayfa: ${pageId}. Atlanıyor.`);
+            return console.log(`⛔ İzinsiz sayfa: ${pageId}`);
         }
         if (fromId === pageId) {
-            return console.log("⛔ Sayfanın kendi yorumu. Atlanıyor.");
+            return console.log("⛔ Sayfanın kendi yorumu");
         }
         if (!commentId) {
-            return console.log("⛔ Comment ID yok. Atlanıyor.");
+            return console.log("⛔ Comment ID yok");
         }
         if (!commentMessage || commentMessage === "undefined") {
-            return console.log("⛔ Mesaj içeriği yok. Atlanıyor.");
+            return console.log("⛔ Mesaj yok");
         }
         
-        // 2. Yorumu Atla (Skip) Kuralı
+        // Yorum filtreleme
         if (shouldSkipComment(commentMessage)) {
-            return console.log("⛔ Yorum kural dışı bırakıldı (Çok kısa ve Pattern istemiyor). İşlem durduruldu.");
+            return console.log("⛔ Basit yorum, atlandı");
         }
 
-        // 3. Redis Duplicate Kontrolü (ATOMİK VE KESİN ÇÖZÜM)
+        // KRİTİK: SETNX ile atomik duplicate kontrolü
         if (redis) {
-            // KRİTİK EKLEME: Çok yakın aralıklarla gelen duplicate istekler için 500ms bekle.
-            // Bu, ilk isteğin atomik SET işlemini tamamlaması için yeterli süreyi tanır.
-            await new Promise(resolve => setTimeout(resolve, 500)); 
+            // Race condition önleme - 200ms bekle
+            await new Promise(resolve => setTimeout(resolve, 200));
             
             const redisKey = `comment:${commentId}`;
-            console.log(`🔍 Redis kontrol (Atomik SET NX) Gecikme Sonrası: ${redisKey}`);
+            console.log(`🔍 Redis SETNX kontrolü: ${redisKey}`);
             
-            // Atomik SET NX komutu: commentId anahtarını SADECE HİÇ YOKSA (NX) ayarlar.
-            const setResult = await redis.set(redisKey, "1", "EX", 2592000, "NX");
+            // SETNX - Atomik "varsa ekleme" işlemi
+            const result = await redis.set(redisKey, "1", "EX", 2592000, "NX");
             
-            if (setResult === 'OK') {
-                console.log(`✅ YENİ YORUM. Redis'e kaydedildi: ${commentId}`);
-            } else if (setResult === null) {
-                console.log(`⛔ DUPLICATE BULUNDU! ${commentId}. İşlem durduruluyor.`);
-                return; // Duplicate olduğu için işlemi sonlandır
+            if (result === 'OK') {
+                console.log(`✅ YENİ YORUM - Redis'e kaydedildi`);
             } else {
-                console.log(`⚠️ Redis'ten beklenmeyen sonuç: ${setResult}. Güvenlik için duplicate kabul edildi.`);
+                console.log(`⛔ DUPLICATE! Zaten var: ${commentId}`);
                 return;
             }
         } else {
-            console.error("🚨 Redis bağlantısı yok! Duplicate kontrolü atlandı (Riskli).");
+            console.error("🚨 Redis yok, duplicate kontrolü yapılamıyor!");
         }
 
-        // 4. Make.com'a gönder
-        console.log(`✅ Yorum, Make.com'a gönderiliyor: ${commentId}`);
-
+        // Make.com'a gönder
+        console.log(`📤 Make.com'a gönderiliyor...`);
+        
         try {
             await axios.post(PATTERN_REQUEST_WEBHOOK_URL, req.body, {
-                timeout: 10000 // 10 saniye zaman aşımı
+                timeout: 10000
             });
-            console.log("✅ Make.com'a başarıyla gönderildi");
+            console.log("✅ Make.com'a gönderildi");
         } catch (error) {
-            console.error(`🚨 Make.com hatası: ${error.message}.`);
-            
-            // Make.com'a gönderme başarısız olursa, tekrar deneme şansı vermek için Redis'teki kaydı SİL.
+            console.error(`🚨 Make.com hatası: ${error.message}`);
+            // Hata durumunda Redis'ten sil
             if (redis) {
                 await redis.del(`comment:${commentId}`);
-                console.log(`🗑️ Make.com hatası nedeniyle Redis'ten silindi: ${commentId}`);
+                console.log(`🗑️ Hata nedeniyle silindi`);
             }
         }
 
     } catch (error) {
-        console.error("🚨 İşleme sırasında genel bir hata oluştu:", error);
+        console.error("🚨 Genel hata:", error);
     }
 });
-
-// *Diğer test ve OAuth endpoint'leri değişmemiştir.*
 
 // Test endpoint
 app.get("/test-redis/:commentId", async (req, res) => {
     if (!redis) {
-        return res.json({ error: "Redis not connected" });
+        return res.json({ error: "Redis yok" });
     }
     
-    const commentId = req.params.commentId;
-    const key = `comment:${commentId}`;
+    const key = `comment:${req.params.commentId}`;
     const value = await redis.get(key);
+    const exists = await redis.exists(key);
     
     res.json({
-        key: key,
-        value: value,
-        valueType: typeof value,
-        exists: value !== null && value !== undefined,
-        isOne: value === "1" || value === 1,
-        ttl: await redis.ttl(key) // Kalan ömrü saniye cinsinden gösterir
+        key,
+        value,
+        exists: exists === 1,
+        ttl: await redis.ttl(key)
     });
 });
 
 // Health Check
 app.get("/health", async (req, res) => {
-    try {
-        let redisStatus = "Disconnected";
-        let redisKeyCount = 0;
-        
-        if (redis && redis.status === 'ready') {
-            const testKey = `health:${Date.now()}`;
-            const result = await redis.set(testKey, "test", "EX", 10, "NX");
-            if (result === 'OK' || await redis.get(testKey) === "test") {
-                redisStatus = "OK";
-                await redis.del(testKey);
-                
-                const keys = await redis.keys("comment:*");
-                redisKeyCount = keys.length;
-            } else {
-                 redisStatus = "Test Failed";
-            }
-        }
-        
-        res.json({
-            status: "OK",
-            redis_status: redisStatus,
-            redis_comment_keys: redisKeyCount,
-            timestamp: new Date().toISOString()
-        });
-    } catch (error) {
-        res.json({
-            status: "ERROR",
-            redis_status: "Error",
-            error: error.message,
-            timestamp: new Date().toISOString()
-        });
+    let redisStatus = "Disconnected";
+    let keyCount = 0;
+    
+    if (redis && redis.status === 'ready') {
+        redisStatus = "Connected";
+        const keys = await redis.keys("comment:*");
+        keyCount = keys.length;
     }
+    
+    res.json({
+        status: "OK",
+        redis: redisStatus,
+        totalComments: keyCount,
+        timestamp: new Date().toISOString()
+    });
 });
 
-// OAuth Endpoints (Mevcut haliyle bırakıldı)
-const APP_ID = "1203840651490478";
-const APP_SECRET = "de926e19322760edf3b377e0255469de";
-const REDIRECT_URI = "https://facebook-webhook-production-410a.up.railway.app/auth";
-
 app.get("/", (req, res) => {
-    const oauthLink = `https://www.facebook.com/v19.0/dialog/oauth?client_id=${APP_ID}&redirect_uri=${REDIRECT_URI}&scope=pages_manage_metadata,pages_read_engagement,pages_show_list,pages_manage_posts,pages_read_user_content&response_type=code`;
     res.send(`
-        <html>
-        <head><title>Facebook Webhook</title></head>
-        <body style="font-family: Arial; padding: 20px;">
-            <h1>Facebook Webhook Sistemi</h1>
-            <p><strong>Redis:</strong> ${redis && redis.status === 'ready' ? "✅ Bağlı ve Hazır" : "❌ Bağlı Değil/Hazır Değil"}</p>
-            <p><a href="/health">📊 Sistem Durumu</a></p>
-            <p><a href="${oauthLink}">👉 Facebook Sayfa Yetkisi Ver</a></p>
-        </body>
-        </html>
+        <h1>Facebook Webhook</h1>
+        <p>Redis: ${redis?.status === 'ready' ? '✅' : '❌'}</p>
+        <p><a href="/health">Health Check</a></p>
     `);
 });
 
-app.get("/auth", async (req, res) => {
-    const code = req.query.code;
-    if (!code) return res.send("Authorization kodu yok");
-    
-    try {
-        const result = await axios.get("https://graph.facebook.com/v19.0/oauth/access_token", {
-            params: {
-                client_id: APP_ID,
-                client_secret: APP_SECRET,
-                redirect_uri: REDIRECT_URI,
-                code
-            }
-        });
-        console.log("✅ Access Token:", result.data.access_token);
-        res.send("✅ Token alındı!");
-    } catch (err) {
-        console.error("Token hatası:", err.message);
-        res.send("Token alınamadı");
-    }
-});
-
-
-// Server Başlat
 app.listen(PORT, () => {
     console.log(`🚀 Server ${PORT} portunda başladı`);
+    console.log(`📦 Redis: ${redis ? "Var" : "YOK!"}`);
 });
