@@ -16,7 +16,7 @@ const PATTERN_REQUEST_WEBHOOK_URL = "https://hook.us2.make.com/rvcgwaursmfmu8gn2
 
 // YENİ: Fotoğraf webhook'u için yeni Make.com senaryonuzun URL'si
 // Bunu kendi Make.com URL'niz ile değiştirmelisiniz!
-const PHOTO_REQUEST_WEBHOOK_URL = "https://hook.us2.make.com/BURAYA_YENI_URL_GELECEK";
+const PHOTO_REQUEST_WEBHOOK_URL = "https://hook.us2.make.com/myjvwo4ouxtvdx8excar5myzy9bjsyhs";
 
 
 // ... (app.get("/webhook") fonksiyonunuz burada... aynı) ...
