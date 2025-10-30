@@ -2,183 +2,240 @@ const express = require("express");
 const axios = require("axios");
 const Redis = require("ioredis");
 
-// ... (Mevcut kodunuzun başı: app, PORT, redis bağlantısı... hepsi aynı)
-// ...
-// ... (MAn_KEYWORDS, SHORT_COMMENT_THRESHOLD, ALLOWED_PAGE_IDS... hepsi aynı)
-// ...
-// ... (shouldSkipComment fonksiyonu... aynı)
-// ...
-// ... (app.get("/webhook") doğrulaması... aynı)
-// ...
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-// MEVCUT Webhook URL'niz
+app.use(express.json());
+
+// Redis Bağlantısı
+let redis = null;
+
+if (process.env.REDIS_URL) {
+    redis = new Redis(process.env.REDIS_URL, {
+        maxRetriesPerRequest: 3,
+        enableReadyCheck: true,
+        lazyConnect: false,
+        retryStrategy: (times) => Math.min(times * 50, 2000)
+    });
+    console.log("✅ Redis'e bağlanılıyor...");
+} else {
+    console.error("🚨 Redis bağlantısı kurulamadı!");
+}
+
+if (redis) {
+    redis.on("error", (err) => console.error(`🚨 Redis Hatası: ${err.message}`));
+    redis.on("connect", () => console.log("✅ Redis'e bağlandı!"));
+    redis.on("ready", () => console.log("✅ Redis hazır!"));
+}
+
+const VERIFY_TOKEN = "Allah1dir.,";
 const PATTERN_REQUEST_WEBHOOK_URL = "https://hook.us2.make.com/rvcgwaursmfmu8gn2mkgxdkvrhyu8yay";
+const PHOTO_POST_WEBHOOK_URL = "https://hook.us2.make.com/myjvwo4ouxtvdx8excar5myzy9bjsyhs";
 
-// YENİ: Fotoğraf webhook'u için yeni Make.com senaryonuzun URL'si
-// Bunu kendi Make.com URL'niz ile değiştirmelisiniz!
-const PHOTO_REQUEST_WEBHOOK_URL = "https://hook.us2.make.com/myjvwo4ouxtvdx8excar5myzy9bjsyhs";
+// GÜNCELLENMİŞ Pattern Kelimeleri - Çok dilli
+const PATTERN_KEYWORDS = [
+    // İngilizce
+    "pattern", "tutorial", "pdf", "template", "guide", "chart", "instructions", 
+    "recipe", "how to", "video", "link", "shop", "etsy", "buy", "where", 
+    "please", "where to buy", "cost", "price", "purchase", "order",
+    
+    // Türkçe
+    "anlatım", "tarif", "yapılışı", "nereden", "link", "fiyat",
+    
+    // İspanyolca  
+    "patrón", "plantilla", "instrucciones", "receta", "como hacer", "donde", 
+    "por favor", "comprar", "precio", "tienda",
+    
+    // Fransızca
+    "patron", "tutoriel", "modèle", "comment faire", "s'il vous plaît", 
+    "acheter", "où", "boutique", "prix",
+    
+    // Almanca
+    "anleitung", "muster", "schablone", "beschreibung", "wie man", "bitte",
+    "kaufen", "wo", "preis", "shop",
+    
+    // Portekizce
+    "padrão", "molde", "instruções", "receita", "como fazer", "onde",
+    "por favor", "comprar", "preço", "loja",
+    
+    // İtalyanca
+    "schema", "modello", "istruzioni", "ricetta", "come fare", "dove",
+    "per favore", "comprare", "prezzo", "negozio"
+];
 
+const SHORT_COMMENT_THRESHOLD = 10;
 
-// ... (app.get("/webhook") fonksiyonunuz burada... aynı) ...
+const ALLOWED_PAGE_IDS = new Set([
+    "768328876640929", "757013007687866", "708914999121089", "141535723466",
+    "1606844446205856", "300592430012288", "1802019006694158", "105749897807346"
+]);
 
+// Yorum Filtreleme Mantığı
+function shouldSkipComment(message) {
+    if (!message || message === "undefined" || message === "null") return true;
+    
+    const cleanMessage = message.trim().toLowerCase();
+    
+    // 10 karakterden uzunsa direkt geçir
+    if (cleanMessage.length >= SHORT_COMMENT_THRESHOLD) {
+        console.log(`✅ Yorum ${SHORT_COMMENT_THRESHOLD}+ karakter, geçiyor`);
+        return false;
+    }
+    
+    // 10 karakterden kısaysa pattern kelimesi ara
+    for (const keyword of PATTERN_KEYWORDS) {
+        if (cleanMessage.includes(keyword)) {
+            console.log(`✅ Kısa yorum ama pattern kelimesi var: "${keyword}"`);
+            return false;
+        }
+    }
+    
+    // Kısa ve pattern kelimesi yok = ATLA
+    console.log(`⛔ Kısa yorum, pattern istemiyor: "${cleanMessage}"`);
+    return true;
+}
 
-// Ana Webhook Handler - GÜNCELLENDİ
+// Webhook Doğrulama
+app.get("/webhook", (req, res) => {
+    const mode = req.query["hub.mode"];
+    const token = req.query["hub.verify_token"];
+    const challenge = req.query["hub.challenge"];
+
+    if (mode === "subscribe" && token === VERIFY_TOKEN) {
+        console.log("✅ Webhook doğrulandı");
+        res.status(200).send(challenge);
+    } else {
+        res.sendStatus(403);
+    }
+});
+
+// Ana Webhook Handler
 app.post("/webhook", async (req, res) => {
-    // Hemen OK dön (Facebook timeout önleme) - Bu aynı kalıyor
+    // Hemen OK dön (Facebook timeout önleme)
     res.status(200).send("OK");
 
     const entry = req.body.entry?.[0];
-    const changes = entry?.changes?.[0]; // 'change' -> 'changes' (orijinaldeki gibi)
+    const changes = entry?.changes?.[0];
 
     try {
         if (!entry || !changes?.value) {
             return console.log("⛔ Eksik veri");
         }
 
-        // Değerleri en üstte alalım
-        const value = changes.value;
-        const item = value.item;
-        const verb = value.verb;
+        const item = changes.value.item;
+        const verb = changes.value.verb;
         const pageId = entry.id;
-        
-        // YENİ YÖNLENDİRİCİ MANTIĞI
-        // ----------------------------------------------------
 
-        // 1. DURUM: YORUM GELDİYSE (Mevcut kodunuz)
-        // ----------------------------------------------------
-        if (item === "comment" && verb === "add") {
+        // YENI FOTO PAYLAŞIMI KONTROLÜ
+        if (item === "photo" && verb === "add") {
+            console.log(`\n📸 YENI FOTO PAYLAŞIMI - Sayfa: ${pageId}`);
             
-            // TAŞINDI: Yorumla ilgili değişkenler artık bu blok içinde
-            const fromId = value.from?.id;
-            const commentId = value.comment_id;
-            const commentMessage = value.message;
-
-            console.log(`\n📨 ${item} geldi (${verb}) - ID: ${commentId}`);
-            console.log(`💬 Mesaj: ${commentMessage?.substring(0, 50)}...`);
-
-            // TAŞINDI: Temel kontroller (Mevcut kodunuz)
             if (!ALLOWED_PAGE_IDS.has(pageId)) {
                 return console.log(`⛔ İzinsiz sayfa: ${pageId}`);
             }
-            if (fromId === pageId) {
-                return console.log("⛔ Sayfanın kendi yorumu");
-            }
-            if (!commentId) {
-                return console.log("⛔ Comment ID yok");
-            }
-            if (!commentMessage || commentMessage === "undefined") {
-                return console.log("⛔ Mesaj yok");
-            }
-            
-            // TAŞINDI: Yorum filtreleme (Mevcut kodunuz)
-            if (shouldSkipComment(commentMessage)) {
-                return console.log("⛔ Basit yorum, atlandı");
-            }
 
-            // TAŞINDI: KRİTİK: SETNX ile atomik duplicate kontrolü (Mevcut kodunuz)
-            if (redis) {
-                await new Promise(resolve => setTimeout(resolve, 200));
-                
-                const redisKey = `comment:${commentId}`;
-                console.log(`🔍 Redis SETNX kontrolü: ${redisKey}`);
-                
-                const result = await redis.set(redisKey, "1", "EX", 2592000, "NX");
-                
-                if (result === 'OK') {
-                    console.log(`✅ YENİ YORUM - Redis'e kaydedildi`);
-                } else {
-                    console.log(`⛔ DUPLICATE! Zaten var: ${commentId}`);
-                    return;
-                }
-            } else {
-                console.error("🚨 Redis yok, duplicate kontrolü yapılamıyor!");
-            }
-
-            // TAŞINDI: Make.com'a gönder (Mevcut kodunuz)
-            console.log(`📤 Make.com'a (YORUM) gönderiliyor...`);
+            const photoId = changes.value.photo_id;
+            const postId = changes.value.post_id;
             
-            try {
-                await axios.post(PATTERN_REQUEST_WEBHOOK_URL, req.body, {
-                    timeout: 10000
-                });
-                console.log("✅ Make.com'a (YORUM) gönderildi");
-            } catch (error) {
-                console.error(`🚨 Make.com (YORUM) hatası: ${error.message}`);
-                if (redis) {
-                    await redis.del(`comment:${commentId}`);
-                    console.log(`🗑️ Hata nedeniyle (YORUM) silindi`);
-                }
-            }
+            console.log(`📷 Photo ID: ${photoId}`);
+            console.log(`📝 Post ID: ${postId}`);
 
-        } // Yorum bloku bitti
-
-        // ----------------------------------------------------
-        // 2. DURUM: FOTOĞRAF GELDİYSE (Yeni kod)
-        // ----------------------------------------------------
-        else if (item === "photo" && verb === "add") {
-            
-            // YENİ: Fotoğraf postuyla ilgili verileri al
-            const fromId = value.from?.id;
-            const postId = value.post_id; // Bu genellikle fotoğrafın ID'sidir
-            const photoUrl = value.link; // Paylaşılan fotoğrafın URL'si
-            
-            console.log(`\n📸 FOTOĞRAF postu geldi (${verb}) - ID: ${postId}`);
-            console.log(`🔗 URL: ${photoUrl}`);
-
-            // YENİ: Kontroller
-            if (!ALLOWED_PAGE_IDS.has(pageId)) {
-                return console.log(`⛔ İzinsiz sayfa (FOTO): ${pageId}`);
-            }
-            
-            // Not: Fotoğraf postlarında 'fromId'nin 'pageId' ile aynı olmasını bekleriz.
-            // Bu yüzden 'fromId === pageId' kontrolünü burada yapmıyoruz.
-            
-            if (!postId) {
-                return console.log("⛔ Post ID yok (FOTO)");
-            }
-
-            // YENİ: Fotoğraflar için de duplicate kontrolü (Post ID'ye göre)
-            if (redis) {
-                const redisKey = `post:${postId}`;
-                console.log(`🔍 Redis SETNX kontrolü (FOTO): ${redisKey}`);
-                
+            // Duplicate kontrolü (opsiyonel - istersen ekleyebiliriz)
+            if (redis && photoId) {
+                const redisKey = `photo:${photoId}`;
                 const result = await redis.set(redisKey, "1", "EX", 2592000, "NX");
                 
                 if (result !== 'OK') {
-                    console.log(`⛔ DUPLICATE POST! Zaten var (FOTO): ${postId}`);
+                    console.log(`⛔ DUPLICATE FOTO! Zaten işlendi: ${photoId}`);
                     return;
                 }
-                console.log(`✅ YENİ POST - Redis'e kaydedildi (FOTO)`);
+                console.log(`✅ Yeni foto - Redis'e kaydedildi`);
             }
 
-            // YENİ: Make.com'daki YENİ webhook'a gönder
-            console.log(`📤 Make.com'a (FOTO) gönderiliyor...`);
+            // Make.com'a foto bilgilerini gönder
+            console.log(`📤 Foto bilgileri Make.com'a gönderiliyor...`);
             
             try {
-                // YENİ: Farklı URL'ye post atıyoruz
-                await axios.post(PHOTO_REQUEST_WEBHOOK_URL, req.body, {
+                await axios.post(PHOTO_POST_WEBHOOK_URL, req.body, {
                     timeout: 10000
                 });
-                console.log("✅ Make.com'a (FOTO) gönderildi");
+                console.log("✅ Foto bilgileri Make.com'a gönderildi");
             } catch (error) {
-                console.error(`🚨 Make.com (FOTO) hatası: ${error.message}`);
-                if (redis) {
-                    // Hata durumunda Redis'ten sil
-                    await redis.del(`post:${postId}`);
-                    console.log(`🗑️ Hata nedeniyle (FOTO) silindi`);
+                console.error(`🚨 Make.com foto webhook hatası: ${error.message}`);
+                // Hata durumunda Redis'ten sil
+                if (redis && photoId) {
+                    await redis.del(`photo:${photoId}`);
+                    console.log(`🗑️ Hata nedeniyle foto kaydı silindi`);
                 }
             }
-            
-        } // Fotoğraf bloku bitti
+            return;
+        }
 
-        // ----------------------------------------------------
-        // 3. DURUM: Diğer (video, status vb.)
-        // ----------------------------------------------------
-        else {
-            if(item) {
-                console.log(`⛔ İşlenmeyen item/verb: ${item}/${verb}, atlandı.`);
+        // MEVCUT YORUM MANTĞI (HİÇ DEĞİŞMEDİ)
+        const fromId = changes.value.from?.id;
+        const commentId = changes.value.comment_id;
+        const commentMessage = changes.value.message;
+        
+        console.log(`\n📨 ${item} geldi (${verb}) - ID: ${commentId}`);
+        console.log(`💬 Mesaj: ${commentMessage?.substring(0, 50)}...`);
+
+        // Temel kontroller
+        if (item !== "comment" || verb !== "add") {
+            return console.log("⛔ Yorum değil");
+        }
+        if (!ALLOWED_PAGE_IDS.has(pageId)) {
+            return console.log(`⛔ İzinsiz sayfa: ${pageId}`);
+        }
+        if (fromId === pageId) {
+            return console.log("⛔ Sayfanın kendi yorumu");
+        }
+        if (!commentId) {
+            return console.log("⛔ Comment ID yok");
+        }
+        if (!commentMessage || commentMessage === "undefined") {
+            return console.log("⛔ Mesaj yok");
+        }
+        
+        // Yorum filtreleme
+        if (shouldSkipComment(commentMessage)) {
+            return console.log("⛔ Basit yorum, atlandı");
+        }
+
+        // KRİTİK: SETNX ile atomik duplicate kontrolü
+        if (redis) {
+            // Race condition önleme - 200ms bekle
+            await new Promise(resolve => setTimeout(resolve, 200));
+            
+            const redisKey = `comment:${commentId}`;
+            console.log(`🔍 Redis SETNX kontrolü: ${redisKey}`);
+            
+            // SETNX - Atomik "varsa ekleme" işlemi
+            const result = await redis.set(redisKey, "1", "EX", 2592000, "NX");
+            
+            if (result === 'OK') {
+                console.log(`✅ YENİ YORUM - Redis'e kaydedildi`);
             } else {
-                console.log(`⛔ İşlenmeyen field: ${changes.field}, atlandı.`);
+                console.log(`⛔ DUPLICATE! Zaten var: ${commentId}`);
+                return;
+            }
+        } else {
+            console.error("🚨 Redis yok, duplicate kontrolü yapılamıyor!");
+        }
+
+        // Make.com'a gönder
+        console.log(`📤 Make.com'a gönderiliyor...`);
+        
+        try {
+            await axios.post(PATTERN_REQUEST_WEBHOOK_URL, req.body, {
+                timeout: 10000
+            });
+            console.log("✅ Make.com'a gönderildi");
+        } catch (error) {
+            console.error(`🚨 Make.com hatası: ${error.message}`);
+            // Hata durumunda Redis'ten sil
+            if (redis) {
+                await redis.del(`comment:${commentId}`);
+                console.log(`🗑️ Hata nedeniyle silindi`);
             }
         }
 
@@ -187,5 +244,52 @@ app.post("/webhook", async (req, res) => {
     }
 });
 
-// ... (Geri kalan kodunuz: /test-redis, /health, /, app.listen... hepsi aynı)
-// ...
+// Test endpoint
+app.get("/test-redis/:commentId", async (req, res) => {
+    if (!redis) {
+        return res.json({ error: "Redis yok" });
+    }
+    
+    const key = `comment:${req.params.commentId}`;
+    const value = await redis.get(key);
+    const exists = await redis.exists(key);
+    
+    res.json({
+        key,
+        value,
+        exists: exists === 1,
+        ttl: await redis.ttl(key)
+    });
+});
+
+// Health Check
+app.get("/health", async (req, res) => {
+    let redisStatus = "Disconnected";
+    let keyCount = 0;
+    
+    if (redis && redis.status === 'ready') {
+        redisStatus = "Connected";
+        const keys = await redis.keys("comment:*");
+        keyCount = keys.length;
+    }
+    
+    res.json({
+        status: "OK",
+        redis: redisStatus,
+        totalComments: keyCount,
+        timestamp: new Date().toISOString()
+    });
+});
+
+app.get("/", (req, res) => {
+    res.send(`
+        <h1>Facebook Webhook</h1>
+        <p>Redis: ${redis?.status === 'ready' ? '✅' : '❌'}</p>
+        <p><a href="/health">Health Check</a></p>
+    `);
+});
+
+app.listen(PORT, () => {
+    console.log(`🚀 Server ${PORT} portunda başladı`);
+    console.log(`📦 Redis: ${redis ? "Var" : "YOK!"}`);
+});
